@@ -11,6 +11,7 @@ asyncpraw = "*"
 redis = "*"
 sqlalchemy = "*"
 asyncpg = "*"
+pre-commit = "*"
 
 [dev-packages]
 ruff = "*"
