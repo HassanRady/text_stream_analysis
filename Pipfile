@@ -1,0 +1,22 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+uvicorn = "==0.23.2"
+fastapi = "==0.103.1"
+starlette = "==0.27.0"
+asyncpraw = "*"
+redis = "*"
+sqlalchemy = "*"
+asyncpg = "*"
+
+[dev-packages]
+ruff = "*"
+mypy = "*"
+pytest = "*"
+pre-commit = "*"
+
+[requires]
+python_version = "3.12"
