@@ -23,8 +23,15 @@ async def run_migrations(settings: PostgresSettings) -> None:
     async with engine.begin() as conn:
         for migration_file in migration_files:
             print(f"Running migration: {migration_file.name}")
-            sql = migration_file.read_text()
-            await conn.execute(text(sql))
+            raw_sql = migration_file.read_text()
+            statements = [
+                stmt.strip()
+                for stmt in raw_sql.split(";")
+                if stmt.strip()
+            ]
+
+            for statement in statements:
+                await conn.execute(text(statement))
             print(f"✓ {migration_file.name} completed")
 
 

@@ -1,12 +1,3 @@
-"""
-001_initial_schema.sql
-
-Creates initial tables:
-- streams (stream registry)
-- stream_checkpoints (recovery checkpoints)
-- stream_errors (error tracking)
-"""
-
 CREATE TABLE IF NOT EXISTS streams (
     id VARCHAR(36) PRIMARY KEY,
     subreddit VARCHAR(255) UNIQUE NOT NULL,
