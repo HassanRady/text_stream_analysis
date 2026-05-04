@@ -1,0 +1,61 @@
+from typing import AsyncGenerator
+
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    create_async_engine,
+)
+from sqlalchemy.orm import sessionmaker
+
+from src.config import PostgresSettings
+
+_engine: object = None
+_async_session_maker: sessionmaker | None = None
+
+
+def build_postgres_url(settings: PostgresSettings) -> str:
+    return (
+        f"postgresql+asyncpg://{settings.user}:{settings.password.get_secret_value()}"
+        f"@{settings.host}:{settings.port}/{settings.db}"
+    )
+
+
+async def init_db(settings: PostgresSettings) -> None:
+    global _engine, _async_session_maker
+
+    url = build_postgres_url(settings)
+    _engine = create_async_engine(  # type: ignore
+        url,
+        echo=False,
+        future=True,
+        pool_pre_ping=True,
+        pool_size=10,
+        max_overflow=20,
+    )
+
+    _async_session_maker = sessionmaker(  # type: ignore
+        _engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        autocommit=False,
+        autoflush=False,
+    )
+
+
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    if _async_session_maker is None:
+        raise RuntimeError("Database not initialized. Call init_db() first.")
+    async with _async_session_maker() as session:
+        yield session
+
+
+async def close_db() -> None:
+    global _engine
+    if _engine is not None:
+        await _engine.dispose()  # type: ignore
+        _engine = None
+
+
+def get_engine() -> object:
+    return _engine
+
+
