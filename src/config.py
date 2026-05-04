@@ -35,3 +35,4 @@ class Settings(BaseSettings):
     # kafka: KafkaSettings = KafkaSettings()
     redis: RedisSettings = RedisSettings()
     postgres: PostgresSettings = PostgresSettings()
+    db_flush_interval: int = Field(10, alias="DB_FLUSH_INTERVAL")
