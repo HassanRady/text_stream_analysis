@@ -4,14 +4,13 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-uvicorn = "==0.23.2"
-fastapi = "==0.103.1"
-starlette = "==0.27.0"
+uvicorn = "*"
+fastapi = "*"
 asyncpraw = "*"
-redis = "*"
 sqlalchemy = "*"
 asyncpg = "*"
-pre-commit = "*"
+redis = "*"
+pydantic-settings = "*"
 
 [dev-packages]
 ruff = "*"
