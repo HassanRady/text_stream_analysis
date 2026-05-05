@@ -1,10 +1,11 @@
-"""StreamManager: starts/stops per-subreddit streaming tasks and coordinates with StreamRegistry."""
+"""StreamManager that starts/stops per-subreddit streaming tasks."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from typing import Any
 
 from src.repositories.stream_registry import StreamNotFoundError, StreamRegistry
@@ -33,10 +34,10 @@ class StreamManager:
         self.registry = registry
         self.runner = runner
         self.instance_id = instance_id
-        # optional distributed lock manager (prevents duplicate streams across instances)
+        # Optional lock manager to prevent duplicate streams across instances.
         self.lock_manager: DistributedLockManager | None = lock_manager
         # local map of stream_id -> asyncio.Task
-        self._tasks: dict[str, asyncio.Task] = {}
+        self._tasks: dict[str, asyncio.Task[None]] = {}
         # protects _tasks
         self._lock = asyncio.Lock()
 
@@ -79,7 +80,7 @@ class StreamManager:
         return meta
 
     async def _run(self, stream_id: str, subreddit: str) -> None:
-        """Wrapper around the user-provided runner. Handles lifecycle updates and errors."""
+        """Wrapper around the runner, handling lifecycle updates and errors."""
         try:
             logger.info("starting runner for %s (id=%s)", subreddit, stream_id)
             await self.runner(subreddit)
@@ -107,19 +108,15 @@ class StreamManager:
             task = self._tasks.get(stream_id)
             if not task:
                 logger.info("stop requested for non-local stream %s", stream_id)
-                try:
+                with suppress(Exception):
                     await self.registry.update_status(stream_id, "stopped")
-                except Exception:
-                    pass
                 return
             task.cancel()
-        try:
+        with suppress(asyncio.CancelledError):
             await task
-        except asyncio.CancelledError:
-            pass
 
     async def list_local_streams(self) -> dict[str, str]:
-        """Return a mapping of local stream_id -> task_name for streams running on this instance."""
+        """Return mapping of local stream_id -> task_name for this instance."""
         async with self._lock:
             return {sid: t.get_name() for sid, t in self._tasks.items()}
 

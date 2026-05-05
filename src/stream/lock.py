@@ -96,7 +96,7 @@ class DistributedLockManager:
         success = await self.redis.expire(key, ttl)
         if success:
             logger.debug(f"✓ Refreshed lock for {subreddit}")
-        return success > 0
+        return bool(success)
 
     async def release_lock(self, subreddit: str, instance_id: str) -> bool:
         """Release a lock (delete from Redis).
@@ -120,7 +120,7 @@ class DistributedLockManager:
         deleted = await self.redis.delete(key)
         if deleted:
             logger.debug(f"✓ Released lock for {subreddit}")
-        return deleted > 0
+        return bool(deleted)
 
     async def is_locked(self, subreddit: str) -> bool:
         """Check if a lock currently exists.
@@ -133,7 +133,7 @@ class DistributedLockManager:
         """
         key = self._lock_key(subreddit)
         exists = await self.redis.exists(key)
-        return exists > 0
+        return bool(exists)
 
     async def get_lock_holder(self, subreddit: str) -> str | None:
         """Get the current lock holder.
@@ -145,4 +145,5 @@ class DistributedLockManager:
             Lock holder info (format: instance_id:token), or None if not locked
         """
         key = self._lock_key(subreddit)
-        return await self.redis.get(key)
+        result = await self.redis.get(key)
+        return str(result) if result else None

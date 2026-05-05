@@ -1,15 +1,17 @@
 import logging
 import uuid
-from datetime import datetime, timezone
+from collections.abc import Callable
+from contextlib import suppress
+from datetime import UTC, datetime
 from typing import Any
 
 import redis.asyncio as redis
 from sqlalchemy import text
 
-try:
+_default_session_maker: Callable[[], Any] | None = None
+
+with suppress(Exception):
     from src.db import get_session as _default_session_maker
-except Exception:
-    _default_session_maker = None
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +28,8 @@ class ErrorHandler:
         """
         Args:
             redis_client: Async Redis client
-            session_maker: optional async session provider for persisting errors to Postgres
+            session_maker: optional async session provider for persisting errors to
+                Postgres
         """
         self.redis = redis_client
         self.error_ttl = 86400  # 24 hours
@@ -54,7 +57,7 @@ class ErrorHandler:
         key = self._error_key(stream_id)
 
         # Use naive UTC timestamp format (compatible with Postgres NOW())
-        ts = datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
+        ts = datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z"
         error_entry = {
             "id": str(uuid.uuid4()),
             "error_type": error_type,
@@ -64,9 +67,9 @@ class ErrorHandler:
         }
 
         # Push to Redis list (keep last 100 errors)
-        await self.redis.lpush(key, str(error_entry))  # Add to front
-        await self.redis.ltrim(key, 0, 99)  # Keep last 100
-        await self.redis.expire(key, self.error_ttl)  # Auto-expire after 24h
+        await self.redis.lpush(key, str(error_entry))  # type: ignore  # Add to front
+        await self.redis.ltrim(key, 0, 99)  # type: ignore  # Keep last 100
+        await self.redis.expire(key, self.error_ttl)
 
         logger.warning(
             f"Stream {stream_id}: {error_type} - {error_message} "
@@ -79,8 +82,24 @@ class ErrorHandler:
                 async with self._session_maker() as session:
                     stmt = text(
                         """
-                        INSERT INTO stream_errors (id, stream_id, error_type, error_message, retry_count, is_recoverable, timestamp)
-                        VALUES (:id, :stream_id, :error_type, :error_message, :retry_count, :is_recoverable, :timestamp)
+                        INSERT INTO stream_errors (
+                            id,
+                            stream_id,
+                            error_type,
+                            error_message,
+                            retry_count,
+                            is_recoverable,
+                            timestamp
+                        )
+                        VALUES (
+                            :id,
+                            :stream_id,
+                            :error_type,
+                            :error_message,
+                            :retry_count,
+                            :is_recoverable,
+                            :timestamp
+                        )
                         """
                     )
                     await session.execute(
@@ -109,7 +128,8 @@ class ErrorHandler:
             Number of errors in the last 24 hours
         """
         key = self._error_key(stream_id)
-        return await self.redis.llen(key)
+        result = await self.redis.llen(key)  # type: ignore
+        return int(result) if result else 0
 
     async def clear_errors(self, stream_id: str) -> None:
         """Clear error history for a stream.
@@ -121,7 +141,9 @@ class ErrorHandler:
         await self.redis.delete(key)
         logger.debug(f"Cleared error history for stream {stream_id}")
 
-    async def get_recent_errors(self, stream_id: str, limit: int = 10) -> list:
+    async def get_recent_errors(
+        self, stream_id: str, limit: int = 10
+    ) -> list[dict[str, Any]]:
         """Get recent errors for a stream.
 
         Args:
@@ -132,8 +154,8 @@ class ErrorHandler:
             List of error entries
         """
         key = self._error_key(stream_id)
-        error_strings = await self.redis.lrange(key, 0, limit - 1)
-        return [eval(e) for e in error_strings if e]  # Convert string back to dict
+        error_strings: list[Any] = await self.redis.lrange(key, 0, limit - 1)  # type: ignore
+        return [eval(str(e)) for e in error_strings if e]  # Convert string back to dict
 
     @staticmethod
     def is_retryable(error: Exception) -> bool:

@@ -6,13 +6,9 @@ from starlette.responses import JSONResponse
 class Error(Exception):
     """Base class for exceptions in this module."""
 
-    pass
-
 
 class RequestError(Error):
-    def __init__(
-        self, status_code: int, error_code: str, error_msg: str | None = None
-    ):
+    def __init__(self, status_code: int, error_code: str, error_msg: str | None = None):
         self.status_code = HTTPStatus(status_code)
         self.error_code = error_code
         self.error_msg = error_msg
@@ -30,7 +26,7 @@ class RequestErrorHandler:
         self.status_code = exc.status_code
         self.error_msg = exc.error_msg
 
-    def process_message(self):
+    def process_message(self) -> JSONResponse:
         return JSONResponse(
             status_code=self.status_code,
             content={

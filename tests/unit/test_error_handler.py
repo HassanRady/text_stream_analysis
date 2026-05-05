@@ -67,6 +67,7 @@ class TestRecoveryStrategy:
         class TooManyRequestsError(Exception):
             pass
 
+        TooManyRequestsError.__name__ = "TooManyRequests"
         error = TooManyRequestsError("Rate limited")
         assert RecoveryStrategy.should_retry_with_backoff(error)
 
@@ -74,5 +75,6 @@ class TestRecoveryStrategy:
         class NotFoundError(Exception):
             pass
 
+        NotFoundError.__name__ = "NotFound"
         error = NotFoundError("Subreddit not found")
         assert RecoveryStrategy.should_abandon_stream(error)

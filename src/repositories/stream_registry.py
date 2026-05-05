@@ -1,27 +1,30 @@
 from __future__ import annotations
 
 import json
-import uuid
 import logging
-from datetime import datetime, timezone
+import uuid
+from collections.abc import Callable
+from contextlib import suppress
+from datetime import UTC, datetime
 from typing import Any
+
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
-try:
+_default_session_maker: Callable[[], Any] | None = None
+
+with suppress(Exception):
     # Import async session provider lazily to avoid circular imports in tests
     from src.db import get_session as _default_session_maker
-except Exception:
-    _default_session_maker = None
 
 
 class StreamExistsError(Exception):
-    pass
+    """Raised when attempting to create a stream that already exists."""
 
 
 class StreamNotFoundError(Exception):
-    pass
+    """Raised when a stream cannot be found in the registry."""
 
 
 def _now_iso() -> str:
@@ -29,19 +32,23 @@ def _now_iso() -> str:
 
     Uses modern timezone-aware approach then strips timezone for DB compatibility.
     """
-    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
+    return datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z"
 
 
 class StreamRegistry:
     """Small helper to manage stream metadata/checkpoints in Redis.
 
     Key layout used here:
-      - stream:meta:{stream_id} -> hash with metadata (subreddit,status,instance_id,config...)
+      - stream:meta:{stream_id} -> hash with metadata
+        (subreddit, status, instance_id, config...)
       - stream:subreddit:{subreddit} -> stream_id (to detect duplicates)
-      - stream:checkpoint:{stream_id} -> hash (last_comment_id, last_processed_at)
+      - stream:checkpoint:{stream_id} -> hash
+        (last_comment_id, last_processed_at)
     """
 
-    def __init__(self, redis=None, session_maker: Any | None = None):
+    def __init__(
+        self, redis: Any, session_maker: Callable[[], Any] | None = None
+    ) -> None:
         """Create a StreamRegistry.
 
         Args:
@@ -70,8 +77,9 @@ class StreamRegistry:
         config: dict[str, Any] | None = None,
         instance_id: str | None = None,
     ) -> dict[str, Any]:
-        """Create a new stream if not exists. Raises StreamExistsError if a stream for the
-        subreddit already exists.
+        """Create a new stream if not exists.
+
+        Raises StreamExistsError if a stream for the subreddit already exists.
         Returns the created stream metadata dict.
         """
         config = config or {}
@@ -104,8 +112,24 @@ class StreamRegistry:
                 async with self._session_maker() as session:
                     stmt = text(
                         """
-                        INSERT INTO streams (id, subreddit, status, instance_id, config, created_at, updated_at)
-                        VALUES (:id, :subreddit, :status, :instance_id, :config, NOW(), NOW())
+                        INSERT INTO streams (
+                            id,
+                            subreddit,
+                            status,
+                            instance_id,
+                            config,
+                            created_at,
+                            updated_at
+                        )
+                        VALUES (
+                            :id,
+                            :subreddit,
+                            :status,
+                            :instance_id,
+                            :config,
+                            NOW(),
+                            NOW()
+                        )
                         ON CONFLICT (id) DO NOTHING
                         """
                     )
@@ -126,7 +150,7 @@ class StreamRegistry:
         return meta
 
     async def get_stream(self, stream_id: str) -> dict[str, Any]:
-        data = await self._redis.hgetall(self._meta_key(stream_id))
+        data: dict[str, Any] = await self._redis.hgetall(self._meta_key(stream_id))
         if not data:
             raise StreamNotFoundError(stream_id)
         if data.get("config"):
@@ -179,7 +203,10 @@ class StreamRegistry:
                 async with self._session_maker() as session:
                     stmt = text(
                         """
-                        UPDATE streams SET status = :status, instance_id = :instance_id, updated_at = NOW()
+                        UPDATE streams
+                        SET status = :status,
+                            instance_id = :instance_id,
+                            updated_at = NOW()
                         WHERE id = :id
                         """
                     )

@@ -12,7 +12,7 @@ from sqlalchemy.orm import declarative_base
 Base = declarative_base()
 
 
-class Stream(Base):
+class Stream(Base):  # type: ignore[valid-type,misc]
     __tablename__ = "streams"
 
     id = Column(String(36), primary_key=True)
@@ -32,7 +32,7 @@ class Stream(Base):
     )
 
 
-class StreamCheckpoint(Base):
+class StreamCheckpoint(Base):  # type: ignore[valid-type,misc]
     __tablename__ = "stream_checkpoints"
 
     id = Column(String(36), primary_key=True)
@@ -44,7 +44,7 @@ class StreamCheckpoint(Base):
     )
 
 
-class StreamError(Base):
+class StreamError(Base):  # type: ignore[valid-type,misc]
     __tablename__ = "stream_errors"
 
     id = Column(String(36), primary_key=True)

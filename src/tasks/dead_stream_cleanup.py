@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from typing import Any
 
 import redis.asyncio as redis
 
@@ -36,7 +37,7 @@ class DeadStreamCleanup:
         self.redis = redis_client
         self.cleanup_interval = cleanup_interval
         self._running = False
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         """Start the background cleanup task."""
@@ -89,8 +90,9 @@ class DeadStreamCleanup:
 
                     # Delete stream entry
                     try:
-                        await self.registry.delete_stream(stream_id)
-                        dead_count += 1
+                        if stream_id:
+                            await self.registry.delete_stream(str(stream_id))
+                            dead_count += 1
                     except Exception as e:
                         logger.error(f"Error deleting stream {stream_id}: {e}")
 
@@ -110,7 +112,7 @@ class DeadStreamCleanup:
             logger.error(f"Error during cleanup sweep: {e}", exc_info=True)
 
     @staticmethod
-    def _is_dead_stream(stream: dict) -> bool:
+    def _is_dead_stream(stream: dict[str, Any]) -> bool:
         """Determine if a stream is dead (should be cleaned up).
 
         A stream is considered dead if:

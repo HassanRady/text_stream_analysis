@@ -75,7 +75,8 @@ class CircuitBreaker:
                     self.state = CircuitState.HALF_OPEN
                     self.success_count = 0
                     logger.info(
-                        f"Circuit breaker entering HALF_OPEN (backoff={self.backoff_seconds}s)"
+                        "Circuit breaker entering HALF_OPEN (backoff=%ss)",
+                        self.backoff_seconds,
                     )
                 else:
                     raise RuntimeError(

@@ -1,11 +1,19 @@
 """Cancel-safe stream worker that wraps the streaming loop."""
 
 import asyncio
+import json
 import logging
-from datetime import datetime, timezone
+from contextlib import suppress
+from datetime import UTC, datetime
+from typing import Any
 
 import asyncpraw
-from asyncprawcore.exceptions import RequestException, TooManyRequests, NotFound, Forbidden
+from asyncprawcore.exceptions import (
+    Forbidden,
+    NotFound,
+    RequestException,
+    TooManyRequests,
+)
 
 from src.repositories.stream_registry import StreamRegistry
 from src.stream.circuit_breaker import CircuitBreaker
@@ -31,13 +39,13 @@ class StreamWorker:
         self,
         subreddit: str,
         reddit_client: asyncpraw.Reddit,
-        kafka_producer,
-        registry: StreamRegistry,
-        lock_manager: DistributedLockManager,
+        kafka_producer: Any,
+        registry: "StreamRegistry",
+        lock_manager: "DistributedLockManager",
         instance_id: str,
         stream_id: str,
         kafka_topic: str,
-    ):
+    ) -> None:
         """
         Args:
             subreddit: Subreddit name to stream
@@ -62,7 +70,7 @@ class StreamWorker:
             failure_threshold=5,
             recovery_timeout=60,
         )
-        # Pass through any session_maker from registry so ErrorHandler can persist errors
+        # Pass through session_maker so ErrorHandler can persist errors.
         self.error_handler = ErrorHandler(
             registry._redis, session_maker=getattr(registry, "_session_maker", None)
         )
@@ -102,10 +110,8 @@ class StreamWorker:
 
             finally:
                 lock_task.cancel()
-                try:
+                with suppress(asyncio.CancelledError):
                     await lock_task
-                except asyncio.CancelledError:
-                    pass
 
         finally:
             if shutdown_event:
@@ -141,96 +147,94 @@ class StreamWorker:
 
                 if comment is None:
                     continue
-
-                if (
-                    checkpoint.get("last_comment_id")
-                    and comment.id == checkpoint["last_comment_id"]
-                ):
-                    logger.debug(f"Skipping already-processed comment {comment.id}")
-                    continue
-
-                try:
-                    value = {
-                        "subreddit": self.subreddit,
-                        "author_id": comment.author.name
-                        if comment.author
-                        else "[deleted]",
-                        "text": comment.body,
-                        "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
-                    }
-
-                    import json
-
-                    self.kafka_producer.produce(
-                        self.kafka_topic,
-                        json.dumps(value).encode("utf-8"),
-                    )
-                    self.kafka_producer.flush()
-
-                    # Update checkpoint every N comments
-                    self.comments_since_checkpoint += 1
-                    if self.comments_since_checkpoint >= self.checkpoint_interval:
-                        await self._save_checkpoint_for_comment(comment)
-                        self.comments_since_checkpoint = 0
-
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    logger.exception(f"Error processing comment {comment.id}: {e}")
-                    await self.error_handler.record_error(
-                        self.stream_id,
-                        "CommentProcessingError",
-                        str(e),
-                        is_recoverable=True,
-                    )
-
+                await self._process_comment(comment, checkpoint)
         except asyncio.CancelledError:
             raise
-        except TooManyRequests as e:
+        except Exception as e:
+            await self._handle_fetch_exception(e)
+
+    async def _process_comment(self, comment: Any, checkpoint: dict[str, Any]) -> None:
+        if (
+            checkpoint.get("last_comment_id")
+            and comment.id == checkpoint["last_comment_id"]
+        ):
+            logger.debug(f"Skipping already-processed comment {comment.id}")
+            return
+
+        try:
+            value = {
+                "subreddit": self.subreddit,
+                "author_id": comment.author.name if comment.author else "[deleted]",
+                "text": comment.body,
+                "timestamp": datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z",
+            }
+
+            self.kafka_producer.produce(
+                self.kafka_topic,
+                json.dumps(value).encode("utf-8"),
+            )
+            self.kafka_producer.flush()
+
+            # Update checkpoint every N comments
+            self.comments_since_checkpoint += 1
+            if self.comments_since_checkpoint >= self.checkpoint_interval:
+                await self._save_checkpoint_for_comment(comment)
+                self.comments_since_checkpoint = 0
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.exception(f"Error processing comment {comment.id}: {e}")
+            await self.error_handler.record_error(
+                self.stream_id,
+                "CommentProcessingError",
+                str(e),
+                is_recoverable=True,
+            )
+
+    async def _handle_fetch_exception(self, error: Exception) -> None:
+        if isinstance(error, TooManyRequests):
             logger.error("Rate limited by Reddit API")
             await self.error_handler.record_error(
                 self.stream_id,
                 "TooManyRequests",
-                str(e),
+                str(error),
                 is_recoverable=True,
             )
-            raise
-        except (NotFound, Forbidden) as e:
-            logger.error("Subreddit unavailable: %s", e)
+        elif isinstance(error, (NotFound, Forbidden)):
+            logger.error("Subreddit unavailable: %s", error)
             await self.error_handler.record_error(
                 self.stream_id,
-                e.__class__.__name__,
-                str(e),
+                error.__class__.__name__,
+                str(error),
                 is_recoverable=False,
             )
             await self.registry.update_status(self.stream_id, "error")
-            raise
-        except RequestException as e:
-            logger.error(f"Reddit API request error: {e}")
+        elif isinstance(error, RequestException):
+            logger.error(f"Reddit API request error: {error}")
             await self.error_handler.record_error(
                 self.stream_id,
                 "RequestException",
-                str(e),
+                str(error),
                 is_recoverable=True,
             )
-            raise
-        except Exception as e:
-            logger.exception(f"Unexpected error in fetch_and_process: {e}")
+        else:
+            logger.exception(f"Unexpected error in fetch_and_process: {error}")
             await self.error_handler.record_error(
                 self.stream_id,
-                e.__class__.__name__,
-                str(e),
-                is_recoverable=ErrorHandler.is_retryable(e),
+                error.__class__.__name__,
+                str(error),
+                is_recoverable=ErrorHandler.is_retryable(error),
             )
-            raise
 
-    async def _save_checkpoint_for_comment(self, comment) -> None:
+        raise error
+
+    async def _save_checkpoint_for_comment(self, comment: Any) -> None:
         """Save checkpoint after processing a comment."""
         try:
             await self.registry.set_checkpoint(
                 self.stream_id,
                 last_comment_id=comment.id,
-                last_processed_at=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+                last_processed_at=datetime.now(UTC).replace(tzinfo=None).isoformat(),
             )
             logger.debug(f"Checkpoint saved: {comment.id}")
         except Exception as e:

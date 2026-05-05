@@ -7,7 +7,8 @@ from datetime import datetime
 from typing import Any
 
 import redis.asyncio as redis
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +19,9 @@ class CheckpointFlusher:
     def __init__(
         self,
         redis_client: redis.Redis,
-        session_maker: sessionmaker,
+        session_maker: async_sessionmaker[AsyncSession],
         flush_interval: int = 10,
-    ):
+    ) -> None:
         """
         Args:
             redis_client: Async Redis client
@@ -77,7 +78,7 @@ class CheckpointFlusher:
                 # key format: "stream:checkpoint:{stream_id}"
                 stream_id = key.split(":")[-1]
 
-                checkpoint_data = await self.redis.hgetall(key)
+                checkpoint_data: dict[str, Any] = await self.redis.hgetall(key)  # type: ignore
 
                 if not checkpoint_data:
                     continue
@@ -114,20 +115,30 @@ class CheckpointFlusher:
         except Exception as e:
             logger.error(f"CheckpointFlusher.flush error: {e}", exc_info=True)
 
-    async def _upsert_checkpoints(self, checkpoints: list[dict]) -> None:
+    async def _upsert_checkpoints(self, checkpoints: list[dict[str, Any]]) -> None:
         """Batch upsert checkpoints to Postgres."""
         async with self.session_maker() as session:
             try:
                 stmt = """
-                    INSERT INTO stream_checkpoints (id, stream_id, last_comment_id, last_processed_at, updated_at)
-                    VALUES (:id, :stream_id, :last_comment_id, :last_processed_at, NOW())
+                    INSERT INTO stream_checkpoints (
+                        id,
+                        stream_id,
+                        last_comment_id,
+                        last_processed_at,
+                        updated_at
+                    )
+                    VALUES (
+                        :id,
+                        :stream_id,
+                        :last_comment_id,
+                        :last_processed_at,
+                        NOW()
+                    )
                     ON CONFLICT (stream_id) DO UPDATE SET
                         last_comment_id = EXCLUDED.last_comment_id,
                         last_processed_at = EXCLUDED.last_processed_at,
                         updated_at = NOW()
                 """
-
-                from sqlalchemy import text
 
                 for checkpoint in checkpoints:
                     await session.execute(
@@ -151,7 +162,7 @@ class CheckpointFlusher:
     async def flush_stream_on_stop(self, stream_id: str) -> None:
         try:
             key = f"stream:checkpoint:{stream_id}"
-            checkpoint_data = await self.redis.hgetall(key)
+            checkpoint_data: dict[str, Any] = await self.redis.hgetall(key)  # type: ignore
 
             if checkpoint_data:
                 last_comment_id = checkpoint_data.get("last_comment_id")

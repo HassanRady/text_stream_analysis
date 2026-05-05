@@ -2,15 +2,16 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
     AsyncSession,
+    async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import sessionmaker
 
 from src.config import PostgresSettings
 
-_engine: object = None
-_async_session_maker: sessionmaker | None = None
+_engine: AsyncEngine | None = None
+_async_session_maker: async_sessionmaker[AsyncSession] | None = None
 
 
 def build_postgres_url(settings: PostgresSettings) -> str:
@@ -24,7 +25,7 @@ async def init_db(settings: PostgresSettings) -> None:
     global _engine, _async_session_maker
 
     url = build_postgres_url(settings)
-    _engine = create_async_engine(  # type: ignore
+    _engine = create_async_engine(
         url,
         echo=False,
         future=True,
@@ -33,11 +34,9 @@ async def init_db(settings: PostgresSettings) -> None:
         max_overflow=20,
     )
 
-    _async_session_maker = sessionmaker(  # type: ignore
+    _async_session_maker = async_sessionmaker(
         _engine,
-        class_=AsyncSession,
         expire_on_commit=False,
-        autocommit=False,
         autoflush=False,
     )
 
@@ -53,9 +52,9 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 async def close_db() -> None:
     global _engine
     if _engine is not None:
-        await _engine.dispose()  # type: ignore
+        await _engine.dispose()
         _engine = None
 
 
-def get_engine() -> object:
+def get_engine() -> AsyncEngine | None:
     return _engine

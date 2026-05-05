@@ -1,16 +1,17 @@
 import asyncio
 import logging
+import os
 import uuid
 from contextlib import asynccontextmanager
+from typing import Any
 
 import asyncpraw
-from asyncprawcore.exceptions import NotFound, Forbidden
+from asyncprawcore.exceptions import Forbidden, NotFound
 from confluent_kafka import Producer
 from fastapi import FastAPI, HTTPException
-from src.db import get_session
 
 from src.config import Settings
-from src.db import close_db, get_engine, init_db
+from src.db import close_db, get_engine, get_session, init_db
 from src.redis_client import close_redis, get_redis
 from src.repositories.stream_registry import StreamExistsError, StreamRegistry
 from src.stream.lock import DistributedLockManager
@@ -20,7 +21,7 @@ from src.tasks import CheckpointFlusher
 from src.tasks.dead_stream_cleanup import DeadStreamCleanup
 
 logger = logging.getLogger(__name__.split(".")[0])
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 
 
 _reddit_client: asyncpraw.Reddit | None = None
@@ -51,13 +52,13 @@ async def _create_runner(
     lock_manager: DistributedLockManager,
     instance_id: str,
     settings: Settings,
-):
+) -> Any:
     """Create a runner function that uses StreamWorker."""
     reddit_client = _get_reddit_client(settings)
     kafka_producer = _get_kafka_producer(settings.kafka.bootstrap_servers)
     kafka_topic = settings.kafka.raw_text_topic
 
-    async def runner(subreddit: str):
+    async def runner(subreddit: str) -> None:
         """Runner that creates a StreamWorker and runs it."""
         stream_meta = await registry.get_stream_by_subreddit(subreddit)
         if not stream_meta:
@@ -86,7 +87,7 @@ async def _create_runner(
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> Any:
     logger.info("Starting up...")
     settings = Settings()
 
@@ -94,7 +95,7 @@ async def lifespan(app: FastAPI):
     logger.info("✓ Postgres initialized")
 
     redis = get_redis(settings.redis)
-    await redis.ping()
+    _ = await redis.ping()  # type: ignore
     logger.info("✓ Redis connected")
 
     # Provide DB session maker to registry and other components so they can persist
@@ -126,12 +127,18 @@ async def lifespan(app: FastAPI):
     if engine is None:
         raise RuntimeError("Engine not initialized after init_db")
 
-    app.state.flusher = CheckpointFlusher(redis, session_maker, flush_interval=settings.db_flush_interval)
+    app.state.flusher = CheckpointFlusher(
+        redis,
+        session_maker,  # type: ignore
+        flush_interval=settings.db_flush_interval,
+    )
     await app.state.flusher.start()
     logger.info("✓ Checkpoint flusher started")
 
     app.state.cleanup = DeadStreamCleanup(
-        app.state.registry, redis, cleanup_interval=settings.dead_stream_cleanup_interval
+        app.state.registry,
+        redis,
+        cleanup_interval=settings.dead_stream_cleanup_interval,
     )
     await app.state.cleanup.start()
     logger.info("✓ Dead stream cleanup started")
@@ -161,7 +168,6 @@ async def lifespan(app: FastAPI):
         await app.state.flusher.stop()
         logger.info("✓ Checkpoint flusher stopped")
 
-
     await close_redis()
     logger.info("✓ Redis closed")
 
@@ -175,7 +181,7 @@ app = FastAPI(lifespan=lifespan)
 
 
 @app.post("/streams")
-async def create_stream(subreddit: str):
+async def create_stream(subreddit: str) -> dict[str, Any]:
     """Start streaming a subreddit."""
     # Pre-validate subreddit availability to avoid creating registry entries
     reddit = getattr(app.state, "reddit_client", None)
@@ -186,30 +192,37 @@ async def create_stream(subreddit: str):
         sr = await reddit.subreddit(subreddit)
         await sr.load()
     except NotFound:
-        raise HTTPException(status_code=404, detail=f"Subreddit '{subreddit}' not found")
+        raise HTTPException(
+            status_code=404, detail=f"Subreddit '{subreddit}' not found"
+        ) from None
     except Forbidden:
-        raise HTTPException(status_code=403, detail=f"Subreddit '{subreddit}' is private or forbidden")
+        raise HTTPException(
+            status_code=403, detail=f"Subreddit '{subreddit}' is private or forbidden"
+        ) from None
     except Exception as e:
         logger.exception("Error validating subreddit %s: %s", subreddit, e)
-        raise HTTPException(status_code=503, detail="Error validating subreddit")
+        raise HTTPException(
+            status_code=503, detail="Error validating subreddit"
+        ) from None
 
     try:
         meta = await app.state.manager.start_stream(subreddit)
-        return meta
+        return dict(meta)
     except StreamExistsError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from None
     except RuntimeError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from None
 
 
 @app.get("/streams")
-async def list_streams():
+async def list_streams() -> list[dict[str, Any]]:
     """List all streams."""
-    return await app.state.registry.list_streams()
+    result = await app.state.registry.list_streams()
+    return list(result)
 
 
 @app.post("/streams/{stream_id}/stop")
-async def stop_stream(stream_id: str):
+async def stop_stream(stream_id: str) -> dict[str, Any]:
     """Stop a stream."""
     await app.state.manager.stop_stream(stream_id)
     return {"stream_id": stream_id, "status": "stopping"}
