@@ -1,9 +1,9 @@
-from typing import Optional
+
 import redis.asyncio as redis
 
 from src.config import RedisSettings
 
-_redis: Optional[redis.Redis] = None
+_redis: redis.Redis | None = None
 
 
 def get_redis(settings: RedisSettings) -> redis.Redis:

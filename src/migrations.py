@@ -4,7 +4,7 @@ from pathlib import Path
 from sqlalchemy import text
 
 from src.config import PostgresSettings
-from src.db import build_postgres_url, init_db
+from src.db import init_db
 
 
 async def run_migrations(settings: PostgresSettings) -> None:
@@ -24,11 +24,7 @@ async def run_migrations(settings: PostgresSettings) -> None:
         for migration_file in migration_files:
             print(f"Running migration: {migration_file.name}")
             raw_sql = migration_file.read_text()
-            statements = [
-                stmt.strip()
-                for stmt in raw_sql.split(";")
-                if stmt.strip()
-            ]
+            statements = [stmt.strip() for stmt in raw_sql.split(";") if stmt.strip()]
 
             for statement in statements:
                 await conn.execute(text(statement))
@@ -54,4 +50,3 @@ async def create_tables_from_models(settings: PostgresSettings) -> None:
 if __name__ == "__main__":
     settings = PostgresSettings()
     asyncio.run(run_migrations(settings))
-
