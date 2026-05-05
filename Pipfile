@@ -11,6 +11,8 @@ sqlalchemy = "*"
 asyncpg = "*"
 redis = "*"
 pydantic-settings = "*"
+praw = "*"
+confluent-kafka = "*"
 
 [dev-packages]
 ruff = "*"

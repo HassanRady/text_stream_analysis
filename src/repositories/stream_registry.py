@@ -2,10 +2,18 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Dict, List, Optional
-from datetime import datetime
+import logging
+from datetime import datetime, timezone
+from typing import Any
+from sqlalchemy import text
 
-from src.redis_client import get_redis
+logger = logging.getLogger(__name__)
+
+try:
+    # Import async session provider lazily to avoid circular imports in tests
+    from src.db import get_session as _default_session_maker
+except Exception:
+    _default_session_maker = None
 
 
 class StreamExistsError(Exception):
@@ -17,7 +25,11 @@ class StreamNotFoundError(Exception):
 
 
 def _now_iso() -> str:
-    return datetime.now().isoformat() + "Z"
+    """Return UTC timestamp as ISO8601 string (naive, no timezone offset).
+
+    Uses modern timezone-aware approach then strips timezone for DB compatibility.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
 
 
 class StreamRegistry:
@@ -29,8 +41,16 @@ class StreamRegistry:
       - stream:checkpoint:{stream_id} -> hash (last_comment_id, last_processed_at)
     """
 
-    def __init__(self, redis=None):
+    def __init__(self, redis=None, session_maker: Any | None = None):
+        """Create a StreamRegistry.
+
+        Args:
+            redis: Async Redis client
+            session_maker: Optional async session provider (callable) used to persist
+                stream metadata to Postgres. If None, DB persistence is disabled.
+        """
         self._redis = redis
+        self._session_maker = session_maker or _default_session_maker
 
     @staticmethod
     def _meta_key(stream_id: str) -> str:
@@ -47,9 +67,9 @@ class StreamRegistry:
     async def create_stream(
         self,
         subreddit: str,
-        config: Optional[Dict[str, Any]] = None,
-        instance_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        config: dict[str, Any] | None = None,
+        instance_id: str | None = None,
+    ) -> dict[str, Any]:
         """Create a new stream if not exists. Raises StreamExistsError if a stream for the
         subreddit already exists.
         Returns the created stream metadata dict.
@@ -77,29 +97,55 @@ class StreamRegistry:
             "updated_at": _now_iso(),
         }
         await redis.hset(self._meta_key(stream_id), mapping=meta)
+
+        # Persist to Postgres streams table if session maker provided
+        if self._session_maker is not None:
+            try:
+                async with self._session_maker() as session:
+                    stmt = text(
+                        """
+                        INSERT INTO streams (id, subreddit, status, instance_id, config, created_at, updated_at)
+                        VALUES (:id, :subreddit, :status, :instance_id, :config, NOW(), NOW())
+                        ON CONFLICT (id) DO NOTHING
+                        """
+                    )
+                    await session.execute(
+                        stmt,
+                        {
+                            "id": stream_id,
+                            "subreddit": subreddit,
+                            "status": meta["status"],
+                            "instance_id": instance_id or None,
+                            "config": json.dumps(config),
+                        },
+                    )
+                    await session.commit()
+            except Exception:
+                logger.exception("Failed to persist stream metadata to Postgres")
+
         return meta
 
-    async def get_stream(self, stream_id: str) -> Dict[str, Any]:
+    async def get_stream(self, stream_id: str) -> dict[str, Any]:
         data = await self._redis.hgetall(self._meta_key(stream_id))
         if not data:
             raise StreamNotFoundError(stream_id)
-        if "config" in data and data["config"]:
+        if data.get("config"):
             try:
                 data["config"] = json.loads(data["config"])
             except Exception:
                 data["config"] = {}
         return data
 
-    async def get_stream_by_subreddit(self, subreddit: str) -> Optional[Dict[str, Any]]:
+    async def get_stream_by_subreddit(self, subreddit: str) -> dict[str, Any] | None:
         sid = await self._redis.get(self._subreddit_key(subreddit))
         if not sid:
             return None
         return await self.get_stream(sid)
 
-    async def list_streams(self) -> List[Dict[str, Any]]:
+    async def list_streams(self) -> list[dict[str, Any]]:
         redis = self._redis
         cursor = 0
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         pattern = "stream:meta:*"
         while True:
             cursor, keys = await redis.scan(cursor=cursor, match=pattern, count=100)
@@ -110,7 +156,7 @@ class StreamRegistry:
                 rows = await pipe.execute()
                 for data in rows:
                     if data:
-                        if "config" in data and data["config"]:
+                        if data.get("config"):
                             try:
                                 data["config"] = json.loads(data["config"])
                             except Exception:
@@ -121,12 +167,33 @@ class StreamRegistry:
         return results
 
     async def update_status(
-        self, stream_id: str, status: str, instance_id: Optional[str] = None
+        self, stream_id: str, status: str, instance_id: str | None = None
     ) -> None:
         mapping = {"status": status, "updated_at": _now_iso()}
         if instance_id is not None:
             mapping["instance_id"] = instance_id
         await self._redis.hset(self._meta_key(stream_id), mapping=mapping)
+        # Also update Postgres if session maker available
+        if self._session_maker is not None:
+            try:
+                async with self._session_maker() as session:
+                    stmt = text(
+                        """
+                        UPDATE streams SET status = :status, instance_id = :instance_id, updated_at = NOW()
+                        WHERE id = :id
+                        """
+                    )
+                    await session.execute(
+                        stmt,
+                        {
+                            "status": status,
+                            "instance_id": instance_id,
+                            "id": stream_id,
+                        },
+                    )
+                    await session.commit()
+            except Exception:
+                logger.exception("Failed to update stream status in Postgres")
 
     async def delete_stream(self, stream_id: str) -> None:
         meta = await self._redis.hgetall(self._meta_key(stream_id))
@@ -143,11 +210,11 @@ class StreamRegistry:
     async def set_checkpoint(
         self,
         stream_id: str,
-        last_comment_id: Optional[str] = None,
-        last_processed_at: Optional[str] = None,
+        last_comment_id: str | None = None,
+        last_processed_at: str | None = None,
     ) -> None:
         key = self._checkpoint_key(stream_id)
-        mapping: Dict[str, str] = {}
+        mapping: dict[str, str] = {}
         if last_comment_id is not None:
             mapping["last_comment_id"] = last_comment_id
         if last_processed_at is not None:
@@ -156,7 +223,7 @@ class StreamRegistry:
             mapping["updated_at"] = _now_iso()
             await self._redis.hset(key, mapping=mapping)
 
-    async def get_checkpoint(self, stream_id: str) -> Dict[str, Optional[str]]:
+    async def get_checkpoint(self, stream_id: str) -> dict[str, str | None]:
         data = await self._redis.hgetall(self._checkpoint_key(stream_id))
         return {
             "last_comment_id": data.get("last_comment_id"),

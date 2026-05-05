@@ -9,7 +9,6 @@ from typing import Any
 import redis.asyncio as redis
 from sqlalchemy.orm import sessionmaker
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -48,7 +47,7 @@ class CheckpointFlusher:
         if self._task:
             try:
                 await asyncio.wait_for(self._task, timeout=5)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("CheckpointFlusher stop timeout, cancelling")
                 self._task.cancel()
         logger.info("CheckpointFlusher stopped")
@@ -89,14 +88,20 @@ class CheckpointFlusher:
                 try:
                     last_processed_at = None
                     if last_processed_at_str:
-                        last_processed_at = datetime.fromisoformat(last_processed_at_str)
+                        # Parse ISO8601 timestamp and ensure it's naive UTC
+                        dt = datetime.fromisoformat(last_processed_at_str.rstrip("Z"))
+                        if dt.tzinfo is not None:
+                            dt = dt.replace(tzinfo=None)
+                        last_processed_at = dt
 
-                    checkpoints_to_upsert.append({
-                        "id": stream_id,
-                        "stream_id": stream_id,
-                        "last_comment_id": last_comment_id,
-                        "last_processed_at": last_processed_at,
-                    })
+                    checkpoints_to_upsert.append(
+                        {
+                            "id": stream_id,
+                            "stream_id": stream_id,
+                            "last_comment_id": last_comment_id,
+                            "last_processed_at": last_processed_at,
+                        }
+                    )
                 except Exception as e:
                     logger.error(
                         f"Error processing checkpoint {stream_id}: {e}",
@@ -154,19 +159,25 @@ class CheckpointFlusher:
 
                 last_processed_at = None
                 if last_processed_at_str:
-                    last_processed_at = datetime.fromisoformat(last_processed_at_str)
+                    # Parse ISO8601 timestamp and ensure it's naive UTC
+                    dt = datetime.fromisoformat(last_processed_at_str.rstrip("Z"))
+                    if dt.tzinfo is not None:
+                        dt = dt.replace(tzinfo=None)
+                    last_processed_at = dt
 
-                await self._upsert_checkpoints([
-                    {
-                        "id": stream_id,
-                        "stream_id": stream_id,
-                        "last_comment_id": last_comment_id,
-                        "last_processed_at": last_processed_at,
-                    }
-                ])
+                await self._upsert_checkpoints(
+                    [
+                        {
+                            "id": stream_id,
+                            "stream_id": stream_id,
+                            "last_comment_id": last_comment_id,
+                            "last_processed_at": last_processed_at,
+                        }
+                    ]
+                )
 
                 logger.debug(f"Immediately flushed checkpoint for {stream_id}")
         except Exception as e:
-            logger.error(f"Error flushing stream {stream_id} on stop: {e}", exc_info=True)
-
-
+            logger.error(
+                f"Error flushing stream {stream_id} on stop: {e}", exc_info=True
+            )

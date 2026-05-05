@@ -1,4 +1,5 @@
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -41,6 +42,7 @@ async def init_db(settings: PostgresSettings) -> None:
     )
 
 
+@asynccontextmanager
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     if _async_session_maker is None:
         raise RuntimeError("Database not initialized. Call init_db() first.")
@@ -57,5 +59,3 @@ async def close_db() -> None:
 
 def get_engine() -> object:
     return _engine
-
-

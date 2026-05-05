@@ -13,7 +13,6 @@ Base = declarative_base()
 
 
 class Stream(Base):
-
     __tablename__ = "streams"
 
     id = Column(String(36), primary_key=True)
@@ -28,22 +27,24 @@ class Stream(Base):
     config = Column(JSON, default={})
     last_heartbeat = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=func.now(), nullable=False)
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+    updated_at = Column(
+        DateTime, default=func.now(), onupdate=func.now(), nullable=False
+    )
 
 
 class StreamCheckpoint(Base):
-
     __tablename__ = "stream_checkpoints"
 
     id = Column(String(36), primary_key=True)
     stream_id = Column(String(36), unique=True, nullable=False, index=True)
     last_comment_id = Column(String(255), nullable=True)
     last_processed_at = Column(DateTime, nullable=True)
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+    updated_at = Column(
+        DateTime, default=func.now(), onupdate=func.now(), nullable=False
+    )
 
 
 class StreamError(Base):
-
     __tablename__ = "stream_errors"
 
     id = Column(String(36), primary_key=True)
@@ -53,5 +54,3 @@ class StreamError(Base):
     retry_count = Column(Integer, default=0)
     is_recoverable = Column(Integer, default=1)  # Boolean (1/0)
     timestamp = Column(DateTime, default=func.now(), nullable=False)
-
-

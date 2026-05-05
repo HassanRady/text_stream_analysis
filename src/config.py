@@ -1,13 +1,11 @@
-from pydantic import SecretStr, Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, SecretStr
+from pydantic_settings import BaseSettings
 
 
 class RedditSettings(BaseSettings):
     client_id: str = Field(alias="REDDIT_CLIENT_ID")
     client_secret: SecretStr = Field(alias="REDDIT_CLIENT_SECRET")
     user_agent: str = Field(alias="REDDIT_USER_AGENT")
-    # username: str = Field(alias="REDDIT_USERNAME")
-    # password: SecretStr = Field(alias="REDDIT_PASSWORD")
 
 
 class KafkaSettings(BaseSettings):
@@ -31,8 +29,10 @@ class PostgresSettings(BaseSettings):
 
 
 class Settings(BaseSettings):
+    db_flush_interval: int = Field(10, alias="DB_FLUSH_INTERVAL")
+    dead_stream_cleanup_interval: int = Field(120, alias="DEAD_STREAM_CLEANUP_INTERVAL")
+
     reddit: RedditSettings = RedditSettings()
-    # kafka: KafkaSettings = KafkaSettings()
+    kafka: KafkaSettings = KafkaSettings()
     redis: RedisSettings = RedisSettings()
     postgres: PostgresSettings = PostgresSettings()
-    db_flush_interval: int = Field(10, alias="DB_FLUSH_INTERVAL")

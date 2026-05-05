@@ -1,5 +1,4 @@
 from http import HTTPStatus
-from typing import Optional
 
 from starlette.responses import JSONResponse
 
@@ -12,7 +11,7 @@ class Error(Exception):
 
 class RequestError(Error):
     def __init__(
-        self, status_code: int, error_code: str, error_msg: Optional[str] = None
+        self, status_code: int, error_code: str, error_msg: str | None = None
     ):
         self.status_code = HTTPStatus(status_code)
         self.error_code = error_code

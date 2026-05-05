@@ -2,10 +2,10 @@
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import asyncpraw
-from asyncprawcore.exceptions import RequestException, TooManyRequests
+from asyncprawcore.exceptions import RequestException, TooManyRequests, NotFound, Forbidden
 
 from src.repositories.stream_registry import StreamRegistry
 from src.stream.circuit_breaker import CircuitBreaker
@@ -62,7 +62,10 @@ class StreamWorker:
             failure_threshold=5,
             recovery_timeout=60,
         )
-        self.error_handler = ErrorHandler(registry._redis)
+        # Pass through any session_maker from registry so ErrorHandler can persist errors
+        self.error_handler = ErrorHandler(
+            registry._redis, session_maker=getattr(registry, "_session_maker", None)
+        )
 
         self.checkpoint_interval = 100
         self.comments_since_checkpoint = 0
@@ -95,7 +98,6 @@ class StreamWorker:
                         shutdown_event = True
                         break
                     except Exception as e:
-                        # Let circuit breaker handle retries
                         await self._handle_error(e)
 
             finally:
@@ -154,7 +156,7 @@ class StreamWorker:
                         if comment.author
                         else "[deleted]",
                         "text": comment.body,
-                        "timestamp": datetime.now(UTC).isoformat() + "Z",
+                        "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
                     }
 
                     import json
@@ -193,6 +195,16 @@ class StreamWorker:
                 is_recoverable=True,
             )
             raise
+        except (NotFound, Forbidden) as e:
+            logger.error("Subreddit unavailable: %s", e)
+            await self.error_handler.record_error(
+                self.stream_id,
+                e.__class__.__name__,
+                str(e),
+                is_recoverable=False,
+            )
+            await self.registry.update_status(self.stream_id, "error")
+            raise
         except RequestException as e:
             logger.error(f"Reddit API request error: {e}")
             await self.error_handler.record_error(
@@ -218,7 +230,7 @@ class StreamWorker:
             await self.registry.set_checkpoint(
                 self.stream_id,
                 last_comment_id=comment.id,
-                last_processed_at=datetime.now(UTC).isoformat() + "Z",
+                last_processed_at=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             )
             logger.debug(f"Checkpoint saved: {comment.id}")
         except Exception as e:

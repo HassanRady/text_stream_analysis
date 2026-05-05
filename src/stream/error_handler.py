@@ -1,8 +1,15 @@
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+from typing import Any
 
 import redis.asyncio as redis
+from sqlalchemy import text
+
+try:
+    from src.db import get_session as _default_session_maker
+except Exception:
+    _default_session_maker = None
 
 logger = logging.getLogger(__name__)
 
@@ -15,13 +22,15 @@ class ErrorHandler:
     Logs errors to help debugging.
     """
 
-    def __init__(self, redis_client: redis.Redis):
+    def __init__(self, redis_client: redis.Redis, session_maker: Any | None = None):
         """
         Args:
             redis_client: Async Redis client
+            session_maker: optional async session provider for persisting errors to Postgres
         """
         self.redis = redis_client
         self.error_ttl = 86400  # 24 hours
+        self._session_maker = session_maker or _default_session_maker
 
     def _error_key(self, stream_id: str) -> str:
         """Generate Redis key for error tracking."""
@@ -34,7 +43,7 @@ class ErrorHandler:
         error_message: str,
         is_recoverable: bool = True,
     ) -> None:
-        """Record an error in Redis.
+        """Record an error in Redis and optionally persist to Postgres.
 
         Args:
             stream_id: Stream ID
@@ -44,12 +53,14 @@ class ErrorHandler:
         """
         key = self._error_key(stream_id)
 
+        # Use naive UTC timestamp format (compatible with Postgres NOW())
+        ts = datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
         error_entry = {
             "id": str(uuid.uuid4()),
             "error_type": error_type,
             "error_message": error_message,
             "is_recoverable": "1" if is_recoverable else "0",
-            "timestamp": datetime.now(UTC).isoformat() + "Z",
+            "timestamp": ts,
         }
 
         # Push to Redis list (keep last 100 errors)
@@ -61,6 +72,32 @@ class ErrorHandler:
             f"Stream {stream_id}: {error_type} - {error_message} "
             f"(recoverable={is_recoverable})"
         )
+
+        # Persist to Postgres stream_errors table if session maker provided
+        if self._session_maker is not None:
+            try:
+                async with self._session_maker() as session:
+                    stmt = text(
+                        """
+                        INSERT INTO stream_errors (id, stream_id, error_type, error_message, retry_count, is_recoverable, timestamp)
+                        VALUES (:id, :stream_id, :error_type, :error_message, :retry_count, :is_recoverable, :timestamp)
+                        """
+                    )
+                    await session.execute(
+                        stmt,
+                        {
+                            "id": error_entry["id"],
+                            "stream_id": stream_id,
+                            "error_type": error_type,
+                            "error_message": error_message,
+                            "retry_count": 0,
+                            "is_recoverable": 1 if is_recoverable else 0,
+                            "timestamp": ts,
+                        },
+                    )
+                    await session.commit()
+            except Exception:
+                logger.exception("Failed to persist stream error to Postgres")
 
     async def get_error_count(self, stream_id: str) -> int:
         """Get number of recent errors for a stream.

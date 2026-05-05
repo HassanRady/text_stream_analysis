@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Awaitable, Callable, Dict, Optional
+from collections.abc import Awaitable, Callable
+from typing import Any
 
-from src.repositories.stream_registry import StreamRegistry, StreamNotFoundError
+from src.repositories.stream_registry import StreamNotFoundError, StreamRegistry
+from src.stream.lock import DistributedLockManager
 
 logger = logging.getLogger(__name__)
 
@@ -26,22 +28,41 @@ class StreamManager:
         registry: StreamRegistry,
         runner: Callable[[str], Awaitable[None]],
         instance_id: str,
+        lock_manager: DistributedLockManager | None = None,
     ):
         self.registry = registry
         self.runner = runner
         self.instance_id = instance_id
+        # optional distributed lock manager (prevents duplicate streams across instances)
+        self.lock_manager: DistributedLockManager | None = lock_manager
         # local map of stream_id -> asyncio.Task
-        self._tasks: Dict[str, asyncio.Task] = {}
+        self._tasks: dict[str, asyncio.Task] = {}
         # protects _tasks
         self._lock = asyncio.Lock()
 
     async def start_stream(
-        self, subreddit: str, config: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        self, subreddit: str, config: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Create registry entry, acquire lock, and start runner task for subreddit.
+
+        Raises StreamExistsError if a stream for the subreddit already exists.
+        Raises RuntimeError if lock cannot be acquired.
+        Returns the stream metadata dict from the registry.
+        """
         meta = await self.registry.create_stream(
             subreddit, config=config, instance_id=self.instance_id
         )
         stream_id = meta["id"]
+
+        # Try to acquire distributed lock
+        if self.lock_manager:
+            lock_acquired = await self.lock_manager.acquire_lock(
+                subreddit, self.instance_id, ttl=60
+            )
+            if not lock_acquired:
+                # Cleanup registry entry since lock failed
+                await self.registry.delete_stream(stream_id)
+                raise RuntimeError(f"Cannot acquire lock for subreddit {subreddit}")
 
         async with self._lock:
             if stream_id in self._tasks:
@@ -97,7 +118,7 @@ class StreamManager:
         except asyncio.CancelledError:
             pass
 
-    async def list_local_streams(self) -> Dict[str, str]:
+    async def list_local_streams(self) -> dict[str, str]:
         """Return a mapping of local stream_id -> task_name for streams running on this instance."""
         async with self._lock:
             return {sid: t.get_name() for sid, t in self._tasks.items()}
@@ -117,4 +138,3 @@ class StreamManager:
                 logger.exception("error stopping stream %s", stream_id)
 
         logger.info("all streams stopped")
-
