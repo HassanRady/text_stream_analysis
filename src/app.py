@@ -40,11 +40,28 @@ def _get_reddit_client(settings: Settings) -> asyncpraw.Reddit:
     return _reddit_client
 
 
-def _get_kafka_producer(bootstrap_servers: str) -> Producer:
+def _get_kafka_producer(config: dict[str, Any]) -> Producer:
     global _kafka_producer
     if _kafka_producer is None:
-        _kafka_producer = Producer({"bootstrap.servers": bootstrap_servers})
+        _kafka_producer = Producer(config)
     return _kafka_producer
+
+
+def _build_kafka_producer_config(settings: Settings) -> dict[str, Any]:
+    config: dict[str, Any] = {"bootstrap.servers": settings.kafka.bootstrap_servers}
+
+    if settings.kafka.security_protocol != "PLAINTEXT":
+        config["security.protocol"] = settings.kafka.security_protocol
+
+    if settings.kafka.sasl_username and settings.kafka.sasl_password is not None:
+        config["sasl.mechanisms"] = settings.kafka.sasl_mechanism
+        config["sasl.username"] = settings.kafka.sasl_username
+        config["sasl.password"] = settings.kafka.sasl_password.get_secret_value()
+
+    if settings.kafka.ssl_ca_location:
+        config["ssl.ca.location"] = settings.kafka.ssl_ca_location
+
+    return config
 
 
 async def _create_runner(
@@ -55,7 +72,7 @@ async def _create_runner(
 ) -> Any:
     """Create a runner function that uses StreamWorker."""
     reddit_client = _get_reddit_client(settings)
-    kafka_producer = _get_kafka_producer(settings.kafka.bootstrap_servers)
+    kafka_producer = _get_kafka_producer_from_settings(settings)
     kafka_topic = settings.kafka.raw_text_topic
 
     async def runner(subreddit: str) -> None:
@@ -84,6 +101,10 @@ async def _create_runner(
             raise
 
     return runner
+
+
+def _get_kafka_producer_from_settings(settings: Settings) -> Producer:
+    return _get_kafka_producer(_build_kafka_producer_config(settings))
 
 
 @asynccontextmanager
@@ -178,6 +199,11 @@ async def lifespan(app: FastAPI) -> Any:
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 
 @app.post("/streams")
