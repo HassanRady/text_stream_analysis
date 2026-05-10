@@ -1,0 +1,28 @@
+{
+  "type": "record",
+  "name": "RedditComment",
+  "namespace": "com.reddit.stream",
+  "doc": "Schema for Reddit comments streamed to Kafka topic",
+  "fields": [
+    {
+      "name": "subreddit",
+      "type": "string",
+      "doc": "Subreddit name (e.g., 'python', 'MachineLearning')"
+    },
+    {
+      "name": "author_id",
+      "type": "string",
+      "doc": "Username of the comment author. '[deleted]' if author deleted their account"
+    },
+    {
+      "name": "text",
+      "type": "string",
+      "doc": "The comment body text"
+    },
+    {
+      "name": "timestamp",
+      "type": "string",
+      "doc": "ISO-8601 timestamp with Z suffix (UTC timezone), e.g., '2026-05-09T14:30:45.123456Z'"
+    }
+  ]
+}
