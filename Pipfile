@@ -13,6 +13,8 @@ redis = "*"
 pydantic-settings = "*"
 praw = "*"
 confluent-kafka = "*"
+aws-glue-schema-registry = "*"
+boto3 = "*"
 
 [dev-packages]
 ruff = "*"

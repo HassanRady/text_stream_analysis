@@ -33,6 +33,14 @@ class PostgresSettings(BaseSettings):
     db: str = Field(alias="POSTGRES_DB")
 
 
+class SchemaSettings(BaseSettings):
+    registry_name: str = Field(alias="SCHEMA_REGISTRY_NAME")
+    schema_name: str = Field(alias="SCHEMA_NAME")
+    schema_version: int = Field(alias="SCHEMA_VERSION")
+    aws_region: str = Field(alias="AWS_REGION")
+    use_localstack: bool = Field(False, alias="USE_LOCALSTACK")
+
+
 class Settings(BaseSettings):
     db_flush_interval: int = Field(10, alias="DB_FLUSH_INTERVAL")
     dead_stream_cleanup_interval: int = Field(120, alias="DEAD_STREAM_CLEANUP_INTERVAL")
@@ -41,3 +49,4 @@ class Settings(BaseSettings):
     kafka: KafkaSettings = KafkaSettings()
     redis: RedisSettings = RedisSettings()
     postgres: PostgresSettings = PostgresSettings()
+    schema_settings: SchemaSettings = SchemaSettings()

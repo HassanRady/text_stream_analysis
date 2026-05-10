@@ -1,7 +1,6 @@
 """Cancel-safe stream worker that wraps the streaming loop."""
 
 import asyncio
-import json
 import logging
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -15,7 +14,10 @@ from asyncprawcore.exceptions import (
     TooManyRequests,
 )
 
+from config import SchemaSettings
+from src.models import RedditCommentMessage
 from src.repositories.stream_registry import StreamRegistry
+from src.serializers.avro_serializer import get_serializer
 from src.stream.circuit_breaker import CircuitBreaker
 from src.stream.error_handler import ErrorHandler, RecoveryStrategy
 from src.stream.lock import DistributedLockManager
@@ -45,6 +47,7 @@ class StreamWorker:
         instance_id: str,
         stream_id: str,
         kafka_topic: str,
+        schema_settings: SchemaSettings,
     ) -> None:
         """
         Args:
@@ -56,6 +59,7 @@ class StreamWorker:
             instance_id: Instance ID
             stream_id: Stream UUID
             kafka_topic: Kafka topic to produce to
+            schema_config: SchemaSettings for Avro serialization
         """
         self.subreddit = subreddit
         self.reddit_client = reddit_client
@@ -65,14 +69,22 @@ class StreamWorker:
         self.instance_id = instance_id
         self.stream_id = stream_id
         self.kafka_topic = kafka_topic
+        self.schema_settings = schema_settings
 
         self.circuit_breaker = CircuitBreaker(
             failure_threshold=5,
             recovery_timeout=60,
         )
-        # Pass through session_maker so ErrorHandler can persist errors.
         self.error_handler = ErrorHandler(
             registry._redis, session_maker=getattr(registry, "_session_maker", None)
+        )
+
+        self.serializer = get_serializer(
+            schema_settings=schema_settings, topic_name=self.kafka_topic
+        )
+        logger.info(
+            f"Initialized Avro serializer (AWS: {schema_settings.use_localstack}, "
+            f"Region: {schema_settings.aws_region})"
         )
 
         self.checkpoint_interval = 100
@@ -162,16 +174,20 @@ class StreamWorker:
             return
 
         try:
-            value = {
-                "subreddit": self.subreddit,
-                "author_id": comment.author.name if comment.author else "[deleted]",
-                "text": comment.body,
-                "timestamp": datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z",
-            }
+            message = RedditCommentMessage(
+                subreddit=self.subreddit,
+                author_id=comment.author.name if comment.author else "[deleted]",
+                text=comment.body,
+                timestamp=datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z",
+            )
+
+            serialized_message = self.serializer.serialize(message)
+            if serialized_message is None:
+                raise ValueError("Serializer returned no payload")
 
             self.kafka_producer.produce(
                 self.kafka_topic,
-                json.dumps(value).encode("utf-8"),
+                serialized_message,
             )
             self.kafka_producer.flush()
 

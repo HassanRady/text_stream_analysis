@@ -1,5 +1,10 @@
-"""Database ORM models."""
+from .reddit_comment import RedditCommentMessage
+from .stream_models import Base, Stream, StreamCheckpoint, StreamError
 
-from src.models.stream_models import Base, Stream, StreamCheckpoint, StreamError
-
-__all__ = ["Base", "Stream", "StreamCheckpoint", "StreamError"]
+__all__ = [
+    "Base",
+    "RedditCommentMessage",
+    "Stream",
+    "StreamCheckpoint",
+    "StreamError",
+]
