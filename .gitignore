@@ -1,4 +1,16 @@
 
-
-# Environments
+.idea/
 .env
+docs
+tmp.*
+
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Terraform local state and cache
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
