@@ -74,6 +74,7 @@ async def _create_runner(
     reddit_client = _get_reddit_client(settings)
     kafka_producer = _get_kafka_producer_from_settings(settings)
     kafka_topic = settings.kafka.raw_text_topic
+    schema_settings = settings.schema_settings
 
     async def runner(subreddit: str) -> None:
         """Runner that creates a StreamWorker and runs it."""
@@ -92,6 +93,7 @@ async def _create_runner(
             instance_id=instance_id,
             stream_id=stream_id,
             kafka_topic=kafka_topic,
+            schema_settings=schema_settings,
         )
 
         try:

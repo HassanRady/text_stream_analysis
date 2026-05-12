@@ -59,7 +59,7 @@ class StreamWorker:
             instance_id: Instance ID
             stream_id: Stream UUID
             kafka_topic: Kafka topic to produce to
-            schema_config: SchemaSettings for Avro serialization
+            schema_settings: SchemaSettings for Avro serialization
         """
         self.subreddit = subreddit
         self.reddit_client = reddit_client
