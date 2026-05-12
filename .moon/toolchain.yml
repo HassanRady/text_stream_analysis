@@ -1,0 +1,7 @@
+# .moon/toolchain.yml
+python:
+  version: '3.12.0'
+  rootVenvOnly: false
+
+terraform:
+  version: '1.7.0'

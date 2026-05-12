@@ -1,0 +1,22 @@
+language: 'python'
+type: 'application'
+
+tasks:
+  install:
+    command: 'pipenv install --dev'
+    inputs:
+      - 'Pipfile'
+      - 'Pipfile.lock'
+
+  test:
+    command: 'pipenv run pytest'
+    inputs:
+      - 'src/**/*'
+      - 'tests/**/*'
+    outputs:
+      - 'junit.xml'
+
+  lint:
+    command: 'pipenv run ruff format src'
+    inputs:
+      - 'src/**/*'
