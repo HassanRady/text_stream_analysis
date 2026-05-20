@@ -34,3 +34,12 @@ output "codeclimate_log_group" {
   value       = aws_cloudwatch_log_group.ecs.name
   description = "CloudWatch log group for ECS tasks"
 }
+output "private_subnet_ids" {
+  value = aws_subnet.private[*].id
+}
+output "ecs_security_group_id" {
+  value = aws_security_group.ecs_tasks.id
+}
+output "ecs_task_definition_arn" {
+  value = aws_ecs_task_definition.app.arn
+}

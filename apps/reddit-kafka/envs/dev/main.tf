@@ -6,8 +6,11 @@ terraform {
     aws = { source = "hashicorp/aws", version = "~> 5.50" }
   }
   backend "s3" {
-    # Configure via backend.tf or CLI:
-    # terraform init -backend-config=...
+    bucket         = "reddit-kafka-tf-state-dev"
+    key            = "state/dev/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "reddit-kafka-tf-locks-dev"
+    encrypt        = true
   }
 }
 provider "aws" {
@@ -16,27 +19,27 @@ provider "aws" {
 module "reddit_kafka" {
   source = "../../terraform"
   # Core configuration
-  aws_region     = var.aws_region
-  project_name   = var.project_name
-  environment    = var.environment
+  aws_region   = var.aws_region
+  project_name = var.project_name
+  environment  = var.environment
   # VPC Configuration
-  vpc_cidr              = var.vpc_cidr
-  public_subnet_cidrs   = var.public_subnet_cidrs
-  private_subnet_cidrs  = var.private_subnet_cidrs
-  availability_zones    = var.availability_zones
+  vpc_cidr             = var.vpc_cidr
+  public_subnet_cidrs  = var.public_subnet_cidrs
+  private_subnet_cidrs = var.private_subnet_cidrs
+  availability_zones   = var.availability_zones
   # Database Configuration
-  rds_instance_class     = var.rds_instance_class
-  rds_master_password    = var.rds_master_password
+  rds_instance_class  = var.rds_instance_class
+  rds_master_password = var.rds_master_password
   # Cache Configuration
   redis_node_type  = var.redis_node_type
   redis_num_nodes  = var.redis_num_nodes
   redis_auth_token = var.redis_auth_token
   # Container Configuration
-  app_image_tag        = var.app_image_tag
-  app_container_port   = var.app_container_port
-  app_desired_count    = var.app_desired_count
-  app_cpu              = var.app_cpu
-  app_memory           = var.app_memory
+  app_image_tag      = var.app_image_tag
+  app_container_port = var.app_container_port
+  app_desired_count  = var.app_desired_count
+  app_cpu            = var.app_cpu
+  app_memory         = var.app_memory
   # HTTPS Configuration
   acm_certificate_arn = var.acm_certificate_arn
   # Secrets
@@ -46,8 +49,8 @@ module "reddit_kafka" {
   kafka_sasl_username  = var.kafka_sasl_username
   kafka_sasl_password  = var.kafka_sasl_password
   # CloudWatch
-  log_retention_days      = var.log_retention_days
-  enable_kms_encryption   = var.enable_kms_encryption
+  log_retention_days    = var.log_retention_days
+  enable_kms_encryption = var.enable_kms_encryption
 }
 # Output infrastructure endpoints
 output "alb_dns" {

@@ -15,6 +15,7 @@ praw = "*"
 confluent-kafka = "*"
 aws-glue-schema-registry = "*"
 boto3 = "*"
+kafka-python-ng = "*"
 
 [dev-packages]
 ruff = "*"

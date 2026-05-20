@@ -202,8 +202,8 @@ resource "aws_rds_cluster" "main" {
   cluster_identifier              = local.name
   engine                          = "aurora-postgresql"
   engine_version                  = "15.4"
-  database_name                   = "reddit"
-  master_username                 = "postgres"
+  database_name                   = var.postgres_db_name
+  master_username                 = var.postgres_user
   master_password                 = local.rds_master_password
   db_subnet_group_name            = aws_db_subnet_group.main.name
   vpc_security_group_ids          = [aws_security_group.rds.id]
@@ -285,7 +285,7 @@ resource "aws_msk_cluster" "main" {
   client_authentication {
     sasl {
       iam   = false
-      scram = true          
+      scram = true
     }
   }
 
@@ -549,7 +549,18 @@ resource "aws_ecs_task_definition" "app" {
       { name = "KAFKA_SECURITY_PROTOCOL", value = var.kafka_security_protocol },
       { name = "KAFKA_SASL_MECHANISM", value = "SCRAM-SHA-512" },
       { name = "KAFKA_SSL_CA_LOCATION", value = "/etc/ssl/certs/ca-certificates.crt" },
-      { name = "KAFKA_RAW_TEXT_TOPIC", value = var.kafka_raw_text_topic }
+      { name = "KAFKA_RAW_TEXT_TOPIC", value = var.kafka_raw_text_topic },
+
+      { name = "SCHEMA_REGISTRY_NAME", value = var.schema_registry_name },
+      { name = "SCHEMA_NAME", value = var.schema_name },
+      { name = "SCHEMA_VERSION", value = var.schema_version },
+      { name = "AWS_REGION", value = var.aws_region },
+      { name = "USE_LOCALSTACK", value = var.use_localstack },
+      { name = "DB_FLUSH_INTERVAL", value = var.db_flush_interval },
+      { name = "DEAD_STREAM_CLEANUP_INTERVAL", value = var.dead_stream_cleanup_interval },
+      { name = "LOG_LEVEL", value = var.log_level }
+
+
     ]
     secrets = [
       { name = "POSTGRES_PASSWORD", valueFrom = aws_secretsmanager_secret.postgres_password.arn },

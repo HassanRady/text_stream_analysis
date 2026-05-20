@@ -113,7 +113,7 @@ variable "kafka_security_protocol" {
 variable "postgres_db_name" {
   type    = string
   default = "reddit_stream"
-  
+
 }
 variable "postgres_user" {
   type    = string
@@ -126,4 +126,41 @@ variable "redis_user" {
 variable "kafka_raw_text_topic" {
   type    = string
   default = "reddit_raw_comments"
+}
+
+
+
+variable "schema_registry_name" {
+  type    = string
+  default = "reddit-kafka-schemas"
+}
+
+variable "schema_name" {
+  type    = string
+  default = "RedditComment"
+}
+
+variable "schema_version" {
+  type    = number
+  default = 1
+}
+
+variable "use_localstack" {
+  type    = bool
+  default = false
+}
+
+variable "db_flush_interval" {
+  type    = number
+  default = 10
+}
+
+variable "dead_stream_cleanup_interval" {
+  type    = number
+  default = 120
+}
+
+variable "log_level" {
+  type    = string
+  default = "INFO"
 }

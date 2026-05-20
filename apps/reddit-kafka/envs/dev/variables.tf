@@ -84,7 +84,7 @@ variable "reddit_client_secret" {
 }
 variable "reddit_user_agent" {
   type    = string
-  default = "reddit-kafka/1.0"
+  default = "ubuntu:StreamAnalysis:v1.0.0 (by u/HassanRady)"
 }
 variable "kafka_sasl_username" {
   type    = string
@@ -102,4 +102,65 @@ variable "log_retention_days" {
 variable "enable_kms_encryption" {
   type    = bool
   default = true
+}
+variable "kafka_security_protocol" {
+  type    = string
+  default = "SASL_SSL"
+}
+
+
+
+variable "postgres_db_name" {
+  type    = string
+  default = "reddit_stream"
+
+}
+variable "postgres_user" {
+  type    = string
+  default = "postgres"
+}
+variable "redis_user" {
+  type    = string
+  default = "default"
+}
+variable "kafka_raw_text_topic" {
+  type    = string
+  default = "reddit_raw_comments"
+}
+
+
+
+variable "schema_registry_name" {
+  type    = string
+  default = "reddit-kafka-schemas"
+}
+
+variable "schema_name" {
+  type    = string
+  default = "RedditComment"
+}
+
+variable "schema_version" {
+  type    = number
+  default = 1
+}
+
+variable "use_localstack" {
+  type    = bool
+  default = false
+}
+
+variable "db_flush_interval" {
+  type    = number
+  default = 10
+}
+
+variable "dead_stream_cleanup_interval" {
+  type    = number
+  default = 120
+}
+
+variable "log_level" {
+  type    = string
+  default = "INFO"
 }
