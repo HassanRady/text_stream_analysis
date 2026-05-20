@@ -1,3 +1,4 @@
+import json
 import logging
 import uuid
 from collections.abc import Callable
@@ -67,7 +68,7 @@ class ErrorHandler:
         }
 
         # Push to Redis list (keep last 100 errors)
-        await self.redis.lpush(key, str(error_entry))  # type: ignore  # Add to front
+        await self.redis.lpush(key, json.dumps(error_entry))  # type: ignore  # Add to front
         await self.redis.ltrim(key, 0, 99)  # type: ignore  # Keep last 100
         await self.redis.expire(key, self.error_ttl)
 
@@ -155,7 +156,9 @@ class ErrorHandler:
         """
         key = self._error_key(stream_id)
         error_strings: list[Any] = await self.redis.lrange(key, 0, limit - 1)  # type: ignore
-        return [eval(str(e)) for e in error_strings if e]  # Convert string back to dict
+        return [
+            json.loads(str(e)) for e in error_strings if e
+        ]  # Convert string back to dict
 
     @staticmethod
     def is_retryable(error: Exception) -> bool:

@@ -4,7 +4,9 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 from enum import Enum
+from collections.abc import Awaitable, Callable
 from typing import Any
+from src.stream.error_handler import ErrorHandler
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +59,11 @@ class CircuitBreaker:
         self.backoff_seconds = recovery_timeout
         self._lock = asyncio.Lock()
 
-    async def call(self, coro: Any) -> Any:
+    async def call(self, coro_factory: Callable[[], Awaitable[Any]]) -> Any:
         """Execute a coroutine through the circuit breaker.
 
         Args:
-            coro: Async coroutine to execute
+            coro_factory: Zero-argument callable that returns the coroutine to run
 
         Returns:
             Result of the coroutine
@@ -84,7 +86,7 @@ class CircuitBreaker:
                     )
 
         try:
-            result = await coro
+            result = await coro_factory()
             async with self._lock:
                 self._record_success()
             return result
@@ -125,18 +127,25 @@ class CircuitBreaker:
         self.failure_count += 1
         self.last_failure_time = datetime.now(UTC)
         self.success_count = 0
+        # Determine suggested backoff from error handler (if applicable)
+        try:
+            suggested = ErrorHandler.get_backoff_duration(exc)
+        except Exception:
+            suggested = 0
 
         if self.state == CircuitState.HALF_OPEN:
-            # Failure during recovery attempt, reset backoff and reopen
-            self.backoff_seconds = int(
-                min(self.backoff_seconds * self.backoff_multiplier, self.max_backoff)
-            )
+            # Failure during recovery attempt: increase backoff and reopen.
+            new_backoff = int(min(max(self.backoff_seconds * self.backoff_multiplier, suggested), self.max_backoff))
+            self.backoff_seconds = new_backoff
             self.state = CircuitState.OPEN
             logger.error(
                 f"Circuit breaker OPEN (exponential backoff: {self.backoff_seconds}s). "
                 f"Reason: {exc}"
             )
-        elif self.fail_count >= self.failure_threshold:
+        elif self.failure_count >= self.failure_threshold:
+            # Open circuit on threshold and prefer any error-suggested backoff
+            new_backoff = int(min(max(self.backoff_seconds * self.backoff_multiplier, suggested), self.max_backoff))
+            self.backoff_seconds = new_backoff
             self.state = CircuitState.OPEN
             logger.error(
                 f"Circuit breaker OPEN after {self.failure_count} failures. "

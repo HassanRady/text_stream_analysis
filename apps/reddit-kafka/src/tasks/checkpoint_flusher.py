@@ -63,51 +63,70 @@ class CheckpointFlusher:
             except Exception as e:
                 logger.error(f"CheckpointFlusher error: {e}", exc_info=True)
 
+    def _parse_checkpoint_data(
+        self, checkpoint_data: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Parse and normalize checkpoint data from Redis.
+
+        Returns normalized checkpoint dict or None if parsing fails.
+        """
+        try:
+            last_processed_at = None
+            last_processed_at_str = checkpoint_data.get("last_processed_at")
+            if last_processed_at_str:
+                # Parse ISO8601 timestamp and ensure it's naive UTC
+                dt = datetime.fromisoformat(last_processed_at_str.rstrip("Z"))
+                if dt.tzinfo is not None:
+                    dt = dt.replace(tzinfo=None)
+                last_processed_at = dt
+
+            return {
+                "last_comment_id": checkpoint_data.get("last_comment_id"),
+                "last_processed_at": last_processed_at,
+            }
+        except Exception as e:
+            logger.error(f"Error parsing checkpoint data: {e}", exc_info=True)
+            return None
+
     async def flush(self) -> None:
         try:
-            # Get all checkpoint keys from Redis: stream:checkpoint:*
+            # Get all checkpoint keys from Redis using SCAN (non-blocking)
             pattern = "stream:checkpoint:*"
-            keys = await self.redis.keys(pattern)
+            keys = []
+            async for key in self.redis.scan_iter(match=pattern):
+                keys.append(key)
 
             if not keys:
                 return
 
             checkpoints_to_upsert = []
 
+            # Batch hgetall calls through pipeline
+            pipe = self.redis.pipeline()
             for key in keys:
+                pipe.hgetall(key)
+
+            results = await pipe.execute()
+
+            for key, checkpoint_data in zip(keys, results, strict=True):
                 # key format: "stream:checkpoint:{stream_id}"
                 stream_id = key.split(":")[-1]
-
-                checkpoint_data: dict[str, Any] = await self.redis.hgetall(key)  # type: ignore
 
                 if not checkpoint_data:
                     continue
 
-                last_comment_id = checkpoint_data.get("last_comment_id")
-                last_processed_at_str = checkpoint_data.get("last_processed_at")
+                parsed = self._parse_checkpoint_data(checkpoint_data)
+                if parsed is None:
+                    continue
 
-                try:
-                    last_processed_at = None
-                    if last_processed_at_str:
-                        # Parse ISO8601 timestamp and ensure it's naive UTC
-                        dt = datetime.fromisoformat(last_processed_at_str.rstrip("Z"))
-                        if dt.tzinfo is not None:
-                            dt = dt.replace(tzinfo=None)
-                        last_processed_at = dt
-
-                    checkpoints_to_upsert.append(
-                        {
-                            "id": stream_id,
-                            "stream_id": stream_id,
-                            "last_comment_id": last_comment_id,
-                            "last_processed_at": last_processed_at,
-                        }
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Error processing checkpoint {stream_id}: {e}",
-                        exc_info=True,
-                    )
+                checkpoints_to_upsert.append(
+                    {
+                        "id": stream_id,
+                        "stream_id": stream_id,
+                        "last_comment_id": parsed["last_comment_id"],
+                        "last_processed_at": parsed["last_processed_at"],
+                    }
+                )
 
             if checkpoints_to_upsert:
                 await self._upsert_checkpoints(checkpoints_to_upsert)

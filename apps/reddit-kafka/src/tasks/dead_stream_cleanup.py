@@ -25,7 +25,7 @@ class DeadStreamCleanup:
         self,
         registry: StreamRegistry,
         redis_client: redis.Redis,
-        cleanup_interval: int = 300,  # 5 minutes
+        cleanup_interval: int = 100,  
     ):
         """
         Args:

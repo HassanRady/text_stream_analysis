@@ -14,7 +14,7 @@ from asyncprawcore.exceptions import (
     TooManyRequests,
 )
 
-from config import SchemaSettings
+from src.config import SchemaSettings
 from src.models import RedditCommentMessage
 from src.repositories.stream_registry import StreamRegistry
 from src.serializers.avro_serializer import get_serializer
@@ -90,6 +90,10 @@ class StreamWorker:
         self.checkpoint_interval = 100
         self.comments_since_checkpoint = 0
         self.lock_refresh_interval = 30
+        # Event set when the worker should stop due to lock loss or other
+        # cooperative shutdown triggers. Observed by the main loop and
+        # long-running streaming loops so the worker can shutdown cleanly.
+        self._stop_event = asyncio.Event()
 
     async def run(self) -> None:
         """Run the streaming loop (cancel-safe).
@@ -109,9 +113,16 @@ class StreamWorker:
 
             try:
                 while True:  # Main loop (broken by CancelledError)
+                    # Cooperative stop requested (e.g. lock could not be refreshed)
+                    if self._stop_event.is_set():
+                        logger.info(
+                            "Stop event set for %s, exiting main loop", self.subreddit
+                        )
+                        shutdown_event = True
+                        break
                     try:
                         await self.circuit_breaker.call(
-                            self._fetch_and_process_comments()
+                            self._fetch_and_process_comments
                         )
                     except asyncio.CancelledError:
                         logger.info(f"StreamWorker cancelled for {self.subreddit}")
@@ -154,6 +165,14 @@ class StreamWorker:
 
         try:
             async for comment in subreddit.stream.comments(skip_existing=skip_existing):
+                # Cooperative stop requested while streaming
+                if self._stop_event.is_set():
+                    logger.info(
+                        "Stop event set during streaming for %s, breaking fetch loop",
+                        self.subreddit,
+                    )
+                    break
+
                 # Check for cancellation
                 await asyncio.sleep(0)  # Yield control to allow cancellation
 
@@ -189,12 +208,13 @@ class StreamWorker:
                 self.kafka_topic,
                 serialized_message,
             )
-            self.kafka_producer.flush()
+            self.kafka_producer.poll(0)
 
             # Update checkpoint every N comments
             self.comments_since_checkpoint += 1
             if self.comments_since_checkpoint >= self.checkpoint_interval:
                 await self._save_checkpoint_for_comment(comment)
+                self.kafka_producer.flush()
                 self.comments_since_checkpoint = 0
         except asyncio.CancelledError:
             raise
@@ -210,37 +230,13 @@ class StreamWorker:
     async def _handle_fetch_exception(self, error: Exception) -> None:
         if isinstance(error, TooManyRequests):
             logger.error("Rate limited by Reddit API")
-            await self.error_handler.record_error(
-                self.stream_id,
-                "TooManyRequests",
-                str(error),
-                is_recoverable=True,
-            )
         elif isinstance(error, (NotFound, Forbidden)):
             logger.error("Subreddit unavailable: %s", error)
-            await self.error_handler.record_error(
-                self.stream_id,
-                error.__class__.__name__,
-                str(error),
-                is_recoverable=False,
-            )
             await self.registry.update_status(self.stream_id, "error")
         elif isinstance(error, RequestException):
             logger.error(f"Reddit API request error: {error}")
-            await self.error_handler.record_error(
-                self.stream_id,
-                "RequestException",
-                str(error),
-                is_recoverable=True,
-            )
         else:
             logger.exception(f"Unexpected error in fetch_and_process: {error}")
-            await self.error_handler.record_error(
-                self.stream_id,
-                error.__class__.__name__,
-                str(error),
-                is_recoverable=ErrorHandler.is_retryable(error),
-            )
 
         raise error
 
@@ -276,6 +272,34 @@ class StreamWorker:
                 )
                 if not success:
                     logger.error(f"Failed to refresh lock for {self.subreddit}")
+                    # Treat inability to refresh the lock as fatal: mark the
+                    # stream as errored and request cooperative shutdown so
+                    # the worker can save checkpoint and release resources.
+                    try:
+                        await self.registry.update_status(
+                            self.stream_id, "error", instance_id=self.instance_id
+                        )
+                    except Exception:
+                        logger.debug(
+                            "Failed to update registry on lock loss for %s",
+                            self.stream_id,
+                        )
+                    # Signal the main loop to stop and exit the refresher.
+                    self._stop_event.set()
+                    break
+                else:
+                    # Send a lightweight heartbeat to the registry so `updated_at`
+                    # reflects liveness while the worker is running. Failures
+                    # here should not break the loop, so swallow exceptions.
+                    try:
+                        await self.registry.update_status(
+                            self.stream_id, "active", instance_id=self.instance_id
+                        )
+                    except Exception:
+                        logger.debug(
+                            "Failed to update registry heartbeat for %s",
+                            self.stream_id,
+                        )
         except asyncio.CancelledError:
             pass
 

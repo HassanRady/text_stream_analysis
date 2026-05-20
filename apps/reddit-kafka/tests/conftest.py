@@ -1,24 +1,17 @@
-import os
 from unittest.mock import AsyncMock, MagicMock
 
-import asyncpraw
 import pytest
 import redis.asyncio as redis
 
 
-@pytest.fixture(scope="session")
-def reddit_client():
-    yield asyncpraw.Reddit(
-        client_id=os.getenv("REDDIT_CLIENT_ID"),
-        client_secret=os.getenv("REDDIT_CLIENT_SECRET"),
-        user_agent=os.getenv("REDDIT_USER_AGENT"),
-    )
+
 
 
 @pytest.fixture
 def redis_mock():
     """Mock Redis client for testing with async support."""
     mock = AsyncMock(spec=redis.Redis)
+    mock.sadd = AsyncMock()
     mock.set = AsyncMock()
     mock.get = AsyncMock()
     mock.hset = AsyncMock()
@@ -30,8 +23,17 @@ def redis_mock():
     mock.expire = AsyncMock()
     mock.llen = AsyncMock()
     mock.lrange = AsyncMock()
-    mock.pipeline = AsyncMock()
+    pipeline_mock = MagicMock()
+    pipeline_mock.hgetall = MagicMock()
+    pipeline_mock.execute = AsyncMock(return_value=[])
+    mock.pipeline = MagicMock(return_value=pipeline_mock)
+    mock.scan_iter = MagicMock(return_value=_empty_async_iter())
     return mock
+
+
+async def _empty_async_iter():
+    if False:
+        yield None
 
 
 @pytest.fixture

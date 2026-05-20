@@ -11,7 +11,7 @@ from aws_schema_registry.avro import AvroSchema
 from botocore.exceptions import ClientError, NoCredentialsError
 from pydantic import BaseModel, ValidationError
 
-from config import SchemaSettings
+from src.config import SchemaSettings
 from src.models import RedditCommentMessage
 
 logger = logging.getLogger(__name__)

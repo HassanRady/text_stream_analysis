@@ -106,6 +106,9 @@ class StreamRegistry:
         }
         await redis.hset(self._meta_key(stream_id), mapping=meta)
 
+        # Track stream ID in a set for efficient registry listing
+        await redis.sadd("streams:all", stream_id)
+
         # Persist to Postgres streams table if session maker provided
         if self._session_maker is not None:
             try:
@@ -232,6 +235,8 @@ class StreamRegistry:
         pipe.delete(self._checkpoint_key(stream_id))
         if subreddit:
             pipe.delete(self._subreddit_key(subreddit))
+        # Remove from stream tracking set
+        pipe.srem("streams:all", stream_id)
         await pipe.execute()
 
     async def set_checkpoint(
