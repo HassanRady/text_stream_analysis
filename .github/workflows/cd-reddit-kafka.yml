@@ -96,7 +96,6 @@ jobs:
           push: true
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ needs.determine-env.outputs.ecr_repository }}:${{ github.sha }}
-            ${{ steps.login-ecr.outputs.registry }}/${{ needs.determine-env.outputs.ecr_repository }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -126,6 +125,7 @@ jobs:
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
 
       - name: Terraform Init
         working-directory: ./apps/reddit-kafka/${{ needs.determine-env.outputs.terraform_dir }}
@@ -145,7 +145,53 @@ jobs:
 
       - name: Terraform Apply
         working-directory: ./apps/reddit-kafka/${{ needs.determine-env.outputs.terraform_dir }}
-        run: terraform apply -auto-approve tfplan
+        run: |
+          set -o pipefail
+
+          # Apply with auto-approve, capture output for error handling
+          if terraform apply -auto-approve tfplan 2>&1 | tee tf-apply.log; then
+            echo "✅ Terraform apply succeeded"
+          else
+            echo "⚠️  Terraform apply failed, checking for known issues..."
+
+            SHOULD_RETRY=false
+
+            if grep -Eq "ResourceExistsException: The operation failed because the secret .*reddit/.*/credentials already exists|ResourceExistsException.*reddit.*credentials|The secret .* already exists" tf-apply.log; then
+              echo "ℹ️  Reddit credentials secret already exists. Importing into state..."
+              SECRET_NAME="reddit-kafka-${{ needs.determine-env.outputs.environment }}/reddit/credentials"
+              if aws secretsmanager describe-secret --secret-id "$SECRET_NAME" &>/dev/null; then
+                SECRET_ARN=$(aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --query 'ARN' --output text)
+                terraform import \
+                  -var="app_image_tag=${{ github.sha }}" \
+                  -var-file="terraform.tfvars" \
+                  module.reddit_kafka.aws_secretsmanager_secret.reddit_credentials \
+                  "$SECRET_ARN" || true
+                SHOULD_RETRY=true
+              fi
+            fi
+
+            if grep -Eq "RepositoryAlreadyExistsException|The repository with name '.*' already exists" tf-apply.log; then
+              echo "ℹ️  ECR repository already exists. Importing into state..."
+              terraform import \
+                -var="app_image_tag=${{ github.sha }}" \
+                -var-file="terraform.tfvars" \
+                module.reddit_kafka.aws_ecr_repository.app \
+                "${{ needs.determine-env.outputs.ecr_repository }}" || true
+              SHOULD_RETRY=true
+            fi
+
+            if [ "$SHOULD_RETRY" = true ]; then
+              echo "Retrying Terraform apply..."
+              terraform plan \
+                -var="app_image_tag=${{ github.sha }}" \
+                -var-file="terraform.tfvars" \
+                -out=tfplan
+              terraform apply -auto-approve tfplan
+            else
+              echo "❌ Terraform apply failed with unexpected error"
+              exit 1
+            fi
+          fi
 
       - name: Get Terraform Outputs
         id: tf-output
@@ -153,7 +199,7 @@ jobs:
         run: |
           echo "alb_dns=$(terraform output -raw alb_dns)" >> $GITHUB_OUTPUT
           echo "ecs_cluster=$(terraform output -raw ecs_cluster_name)" >> $GITHUB_OUTPUT
-          echo "subnet_ids=$(terraform output -raw private_subnet_ids)" >> $GITHUB_OUTPUT
+          echo "subnet_ids=$(terraform output -json private_subnet_ids | jq -c '.')" >> $GITHUB_OUTPUT
           echo "security_group_id=$(terraform output -raw ecs_security_group_id)" >> $GITHUB_OUTPUT
           echo "task_definition=$(terraform output -raw ecs_task_definition_arn)" >> $GITHUB_OUTPUT
 
@@ -163,7 +209,7 @@ jobs:
           # Extract subnet and security group from Terraform outputs
           SUBNETS=$(echo '${{ steps.tf-output.outputs.subnet_ids }}' | jq -c '.')
           SG=$(echo '${{ steps.tf-output.outputs.security_group_id }}')
-          TASK_DEF=$(echo '${{ steps.tf-output.outputs.task_definition }}' | rev | cut -d':' -f1 | rev)
+          TASK_DEF='${{ steps.tf-output.outputs.task_definition }}'
 
           # Extract cluster name for the run-task call
           CLUSTER="${{ needs.determine-env.outputs.ecs_cluster }}"

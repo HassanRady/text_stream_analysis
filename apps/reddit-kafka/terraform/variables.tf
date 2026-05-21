@@ -28,7 +28,7 @@ variable "availability_zones" {
 }
 variable "rds_instance_class" {
   type    = string
-  default = "db.t3.micro"
+  default = "db.r5.large"
 }
 variable "rds_master_password" {
   type      = string
