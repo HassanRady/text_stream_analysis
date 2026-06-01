@@ -1,7 +1,49 @@
 
+data "aws_caller_identity" "current" {}
+
+data "aws_iam_policy_document" "kms" {
+  statement {
+    sid     = "AllowAccountRoot"
+    effect  = "Allow"
+    actions = ["kms:*"]
+    resources = ["*"]
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+  }
+
+  statement {
+    sid     = "AllowSecretsManager"
+    effect  = "Allow"
+    actions = [
+      "kms:Decrypt",
+      "kms:Encrypt",
+      "kms:GenerateDataKey*",
+      "kms:DescribeKey"
+    ]
+    resources = ["*"]
+    principals {
+      type        = "Service"
+      identifiers = ["secretsmanager.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "kms:CallerAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["secretsmanager.${var.aws_region}.amazonaws.com"]
+    }
+  }
+}
+
 resource "random_password" "rds_master" {
   length  = 32
   special = true
+  override_special = "!#$%&'()*+,-.:;<=>?[]^_`{|}~"
 }
 
 resource "random_password" "redis_auth" {
@@ -22,6 +64,7 @@ resource "aws_kms_key" "main" {
   description             = "KMS key for ${local.name}"
   deletion_window_in_days = 7
   enable_key_rotation     = true
+  policy                  = data.aws_iam_policy_document.kms.json
 }
 resource "aws_kms_alias" "main" {
   count         = var.enable_kms_encryption ? 1 : 0
@@ -301,7 +344,7 @@ resource "aws_msk_cluster" "main" {
 }
 resource "aws_ecr_repository" "app" {
   name                 = "${local.name}-app"
-  image_tag_mutability = "IMMUTABLE"
+  image_tag_mutability = "MUTABLE"
   image_scanning_configuration {
     scan_on_push = true
   }
@@ -435,29 +478,8 @@ resource "aws_secretsmanager_secret_version" "redis_password" {
   secret_string = local.redis_auth_token
 }
 
-resource "aws_secretsmanager_secret" "reddit_credentials" {
-  name                    = "${local.name}/reddit/credentials"
-  recovery_window_in_days = 7
-
-  lifecycle {
-    # Prevent destruction of this secret
-    prevent_destroy = true
-    # Ignore changes to allow management of manually created secrets
-    ignore_changes = all
-  }
-}
-
-resource "aws_secretsmanager_secret_version" "reddit_credentials" {
-  secret_id = aws_secretsmanager_secret.reddit_credentials.id
-  secret_string = jsonencode({
-    client_id     = var.reddit_client_id
-    client_secret = var.reddit_client_secret
-    user_agent    = var.reddit_user_agent
-  })
-
-  lifecycle {
-    ignore_changes = all
-  }
+data "aws_secretsmanager_secret" "reddit_credentials" {
+  name = "${local.name}/reddit/credentials"
 }
 
 resource "aws_secretsmanager_secret" "kafka_scram" {
@@ -493,9 +515,26 @@ resource "aws_iam_role_policy" "ecs_task_execution_secrets" {
       Resource = [
         aws_secretsmanager_secret.postgres_password.arn,
         aws_secretsmanager_secret.redis_password.arn,
-        aws_secretsmanager_secret.reddit_credentials.arn,
+        data.aws_secretsmanager_secret.reddit_credentials.arn,
         aws_secretsmanager_secret.kafka_scram.arn
       ]
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "ecs_task_execution_kms" {
+  count = var.enable_kms_encryption ? 1 : 0
+  name  = "${local.name}-ecs-execution-kms"
+  role  = aws_iam_role.ecs_task_execution_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "kms:Decrypt",
+        "kms:DescribeKey"
+      ]
+      Resource = aws_kms_key.main[0].arn
     }]
   })
 }
@@ -600,7 +639,7 @@ resource "aws_ecs_task_definition" "app" {
       }
     }
     environment = [
-      { name = "POSTGRES_HOST", value = aws_rds_cluster.main.reader_endpoint },
+      { name = "POSTGRES_HOST", value = aws_rds_cluster.main.endpoint },
       { name = "POSTGRES_PORT", value = "5432" },
       { name = "POSTGRES_DB", value = var.postgres_db_name },
       { name = "POSTGRES_USER", value = var.postgres_user },
@@ -628,8 +667,8 @@ resource "aws_ecs_task_definition" "app" {
     secrets = [
       { name = "POSTGRES_PASSWORD", valueFrom = aws_secretsmanager_secret.postgres_password.arn },
       { name = "REDIS_PASSWORD", valueFrom = aws_secretsmanager_secret.redis_password.arn },
-      { name = "REDDIT_CLIENT_ID", valueFrom = aws_secretsmanager_secret.reddit_credentials.arn, key = "client_id" },
-      { name = "REDDIT_CLIENT_SECRET", valueFrom = aws_secretsmanager_secret.reddit_credentials.arn, key = "client_secret" },
+      { name = "REDDIT_CLIENT_ID", valueFrom = data.aws_secretsmanager_secret.reddit_credentials.arn, key = "client_id" },
+      { name = "REDDIT_CLIENT_SECRET", valueFrom = data.aws_secretsmanager_secret.reddit_credentials.arn, key = "client_secret" },
       { name = "KAFKA_SASL_USERNAME", valueFrom = aws_secretsmanager_secret.kafka_scram.arn, key = "username" },
       { name = "KAFKA_SASL_PASSWORD", valueFrom = aws_secretsmanager_secret.kafka_scram.arn, key = "password" }
     ]

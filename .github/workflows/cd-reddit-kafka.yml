@@ -96,6 +96,7 @@ jobs:
           push: true
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ needs.determine-env.outputs.ecr_repository }}:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ needs.determine-env.outputs.ecr_repository }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -206,48 +207,67 @@ jobs:
       - name: Run Database Migrations
         id: migrations
         run: |
-          # Extract subnet and security group from Terraform outputs
-          SUBNETS=$(echo '${{ steps.tf-output.outputs.subnet_ids }}' | jq -c '.')
-          SG=$(echo '${{ steps.tf-output.outputs.security_group_id }}')
+          # Extract values from Terraform outputs
+          SUBNETS='${{ steps.tf-output.outputs.subnet_ids }}'
+          SG='${{ steps.tf-output.outputs.security_group_id }}'
           TASK_DEF='${{ steps.tf-output.outputs.task_definition }}'
 
           # Extract cluster name for the run-task call
           CLUSTER="${{ needs.determine-env.outputs.ecs_cluster }}"
 
+          # Build a valid JSON network configuration to avoid shell quoting issues
+          NET_CONFIG=$(jq -n --argjson subs "$SUBNETS" --arg sg "$SG" \
+            '{"awsvpcConfiguration":{"subnets":$subs,"securityGroups":[$sg],"assignPublicIp":"DISABLED"}}')
+
           RUN_OUT=$(aws ecs run-task \
           --cluster "$CLUSTER" \
           --task-definition "$TASK_DEF" \
           --launch-type FARGATE \
-          --network-configuration "awsvpcConfiguration={subnets=$SUBNETS,securityGroups=[$SG],assignPublicIp=DISABLED}" \
+          --network-configuration "$NET_CONFIG" \
           --overrides '{"containerOverrides":[{"name":"app","command":["python","-m","src.migrations"]}]}' \
           --region $AWS_REGION --output json)
 
+          FAILURES=$(echo "$RUN_OUT" | jq -c '.failures // []')
+          if [ "$FAILURES" != "[]" ]; then
+            echo "❌ ECS run-task returned failures: $FAILURES"
+            exit 1
+          fi
+
           TASK_ARN=$(echo "$RUN_OUT" | jq -r '.tasks[0].taskArn // ""')
+          if [ -z "$TASK_ARN" ]; then
+            echo "❌ No task ARN returned from ECS run-task"
+            exit 1
+          fi
 
           echo "task_arn=$TASK_ARN" >> $GITHUB_OUTPUT
 
       - name: Wait for Migrations to Complete
         run: |
-          if [ -n "${{ steps.migrations.outputs.task_arn }}" ]; then
-            aws ecs wait tasks-stopped \
-              --cluster ${{ needs.determine-env.outputs.ecs_cluster }} \
-              --tasks ${{ steps.migrations.outputs.task_arn }} \
-              --region ${{ env.AWS_REGION }}
-            
-            # Check exit code
-            EXIT_CODE=$(aws ecs describe-tasks \
-              --cluster ${{ needs.determine-env.outputs.ecs_cluster }} \
-              --tasks ${{ steps.migrations.outputs.task_arn }} \
-              --query 'tasks[0].containers[0].exitCode' \
-              --output text \
-              --region ${{ env.AWS_REGION }})
-            
-            if [ "$EXIT_CODE" != "0" ]; then
-              echo "❌ Migrations failed with exit code: $EXIT_CODE"
-              exit 1
-            fi
-            echo "✅ Migrations completed successfully"
+          if [ -z "${{ steps.migrations.outputs.task_arn }}" ]; then
+            echo "❌ Migration task ARN is empty"
+            exit 1
           fi
+
+          aws ecs wait tasks-stopped \
+            --cluster ${{ needs.determine-env.outputs.ecs_cluster }} \
+            --tasks ${{ steps.migrations.outputs.task_arn }} \
+            --region ${{ env.AWS_REGION }}
+
+          TASK_DESC=$(aws ecs describe-tasks \
+            --cluster ${{ needs.determine-env.outputs.ecs_cluster }} \
+            --tasks ${{ steps.migrations.outputs.task_arn }} \
+            --output json \
+            --region ${{ env.AWS_REGION }})
+
+          EXIT_CODE=$(echo "$TASK_DESC" | jq -r '.tasks[0].containers[0].exitCode // ""')
+          STOPPED_REASON=$(echo "$TASK_DESC" | jq -r '.tasks[0].stoppedReason // ""')
+
+          if [ -z "$EXIT_CODE" ] || [ "$EXIT_CODE" != "0" ]; then
+            echo "❌ Migrations failed. Exit code: ${EXIT_CODE:-null}. Reason: $STOPPED_REASON"
+            echo "$TASK_DESC" | jq -c '.tasks[0].containers[0]'
+            exit 1
+          fi
+          echo "✅ Migrations completed successfully"
         timeout-minutes: 10
 
       - name: Wait for Service Stability
