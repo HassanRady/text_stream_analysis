@@ -705,10 +705,10 @@ resource "aws_ecs_task_definition" "app" {
     secrets = [
       { name = "POSTGRES_PASSWORD", valueFrom = aws_secretsmanager_secret.postgres_password.arn },
       { name = "REDIS_PASSWORD", valueFrom = aws_secretsmanager_secret.redis_password.arn },
-      { name = "REDDIT_CLIENT_ID", valueFrom = data.aws_secretsmanager_secret.reddit_credentials.arn, key = "client_id" },
-      { name = "REDDIT_CLIENT_SECRET", valueFrom = data.aws_secretsmanager_secret.reddit_credentials.arn, key = "client_secret" },
-      { name = "KAFKA_SASL_USERNAME", valueFrom = aws_secretsmanager_secret.kafka_scram.arn, key = "username" },
-      { name = "KAFKA_SASL_PASSWORD", valueFrom = aws_secretsmanager_secret.kafka_scram.arn, key = "password" }
+      { name = "REDDIT_CLIENT_ID", valueFrom = "${data.aws_secretsmanager_secret.reddit_credentials.arn}:REDDIT_CLIENT_ID::" },
+      { name = "REDDIT_CLIENT_SECRET", valueFrom = "${data.aws_secretsmanager_secret.reddit_credentials.arn}:REDDIT_CLIENT_SECRET::" },
+      { name = "KAFKA_SASL_USERNAME", valueFrom = "${aws_secretsmanager_secret.kafka_scram.arn}:username::" },
+      { name = "KAFKA_SASL_PASSWORD", valueFrom = "${aws_secretsmanager_secret.kafka_scram.arn}:password::" }
     ]
   }])
   tags = { Name = local.name }
