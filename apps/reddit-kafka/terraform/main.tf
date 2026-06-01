@@ -488,9 +488,16 @@ resource "aws_iam_role_policy" "ecs_task_policy" {
       Effect = "Allow"
       Action = [
         "logs:CreateLogStream",
-        "logs:PutLogEvents"
+        "logs:PutLogEvents",
+        "glue:GetSchema",
+        "glue:GetSchemaVersion",
+        "glue:GetSchemaByDefinition"
       ]
-      Resource = "${aws_cloudwatch_log_group.ecs.arn}:*"
+      Resource = [
+        "${aws_cloudwatch_log_group.ecs.arn}:*",
+        "arn:aws:glue:${var.aws_region}:${data.aws_caller_identity.current.account_id}:registry/${var.schema_registry_name}",
+        "arn:aws:glue:${var.aws_region}:${data.aws_caller_identity.current.account_id}:schema/${var.schema_registry_name}/${var.schema_name}"
+      ]
     }]
   })
 }
