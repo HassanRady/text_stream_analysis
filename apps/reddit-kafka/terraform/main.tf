@@ -684,6 +684,7 @@ resource "aws_ecs_task_definition" "app" {
       { name = "REDIS_HOST", value = aws_elasticache_replication_group.redis.primary_endpoint_address },
       { name = "REDIS_PORT", value = "6379" },
       { name = "REDIS_USER", value = var.redis_user },
+      { name = "REDIS_USE_SSL", value = tostring(var.enable_kms_encryption) },
       { name = "KAFKA_BOOTSTRAP_SERVERS", value = aws_msk_cluster.main.bootstrap_brokers_sasl_scram },
       { name = "KAFKA_SECURITY_PROTOCOL", value = var.kafka_security_protocol },
       { name = "KAFKA_SASL_MECHANISM", value = "SCRAM-SHA-512" },

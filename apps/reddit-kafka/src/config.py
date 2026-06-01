@@ -23,6 +23,7 @@ class RedisSettings(BaseSettings):
     port: int = Field(alias="REDIS_PORT")
     user: str = Field(alias="REDIS_USER")
     password: SecretStr = Field(alias="REDIS_PASSWORD")
+    use_ssl: bool = Field(False, alias="REDIS_USE_SSL")
 
 
 class PostgresSettings(BaseSettings):
