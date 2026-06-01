@@ -297,6 +297,19 @@ resource "aws_elasticache_replication_group" "redis" {
   auth_token                 = var.enable_kms_encryption ? local.redis_auth_token : ""
   snapshot_retention_limit   = 5
   snapshot_window            = "02:00-03:00"
+  apply_immediately          = true
+  log_delivery_configuration {
+    destination      = aws_cloudwatch_log_group.redis_engine.name
+    destination_type = "cloudwatch-logs"
+    log_type         = "engine-log"
+    log_format       = "text"
+  }
+  log_delivery_configuration {
+    destination      = aws_cloudwatch_log_group.redis_slow.name
+    destination_type = "cloudwatch-logs"
+    log_type         = "slow-log"
+    log_format       = "text"
+  }
   tags                       = { Name = local.name }
 }
 resource "aws_msk_configuration" "main" {
@@ -338,6 +351,15 @@ resource "aws_msk_cluster" "main" {
   configuration_info {
     arn      = aws_msk_configuration.main.arn
     revision = aws_msk_configuration.main.latest_revision
+  }
+
+  logging_info {
+    broker_logs {
+      cloudwatch_logs {
+        enabled   = true
+        log_group = aws_cloudwatch_log_group.msk.name
+      }
+    }
   }
 
   tags = { Name = local.name }
@@ -389,6 +411,21 @@ resource "aws_cloudwatch_log_group" "ecs" {
   retention_in_days = var.log_retention_days
   # Not setting kms_key_id here unless we configure the KMS key policy to allow logs service
   tags = { Name = local.name }
+}
+resource "aws_cloudwatch_log_group" "msk" {
+  name              = "/msk/${local.name}"
+  retention_in_days = var.log_retention_days
+  tags              = { Name = local.name }
+}
+resource "aws_cloudwatch_log_group" "redis_engine" {
+  name              = "/elasticache/${local.name}/engine"
+  retention_in_days = var.log_retention_days
+  tags              = { Name = local.name }
+}
+resource "aws_cloudwatch_log_group" "redis_slow" {
+  name              = "/elasticache/${local.name}/slow"
+  retention_in_days = var.log_retention_days
+  tags              = { Name = local.name }
 }
 resource "aws_iam_role" "ecs_task_execution_role" {
   name = "${local.name}-ecs-execution"
@@ -556,9 +593,9 @@ resource "aws_lb_target_group" "app" {
   target_type = "ip"
   health_check {
     healthy_threshold   = 2
-    unhealthy_threshold = 2
-    timeout             = 3
-    interval            = 30
+    unhealthy_threshold = 5
+    timeout             = 10
+    interval            = 20
     path                = "/health"
     matcher             = "200"
   }
@@ -681,7 +718,7 @@ resource "aws_ecs_service" "app" {
   task_definition                    = aws_ecs_task_definition.app.arn
   desired_count                      = var.app_desired_count
   enable_execute_command             = true
-  health_check_grace_period_seconds  = 60
+  health_check_grace_period_seconds  = 300
   deployment_minimum_healthy_percent = 50
   deployment_maximum_percent         = 200
   deployment_circuit_breaker {
