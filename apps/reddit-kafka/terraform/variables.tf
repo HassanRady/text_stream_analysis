@@ -125,7 +125,7 @@ variable "redis_user" {
 }
 variable "kafka_raw_text_topic" {
   type    = string
-  default = "reddit_raw_comments"
+  default = "RedditComment"
 }
 
 
